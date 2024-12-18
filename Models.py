@@ -14,7 +14,7 @@ class BioClinicalBERT_FT(nn.Module):
         self.device = device
 
     def forward(self, input_ids, attention_mask):
-        # Extract CLS embedding from the last hidden state
+        # Extract CLS embedding from the last layer
         output = self.BioBert(input_ids=input_ids, attention_mask=attention_mask)
         cls_embedding = output.last_hidden_state[:, 0, :]  # CLS token embedding
         return cls_embedding
@@ -39,7 +39,7 @@ class BEHRTModel(nn.Module):
         self.bert = BertModel(config)
 
     def forward(self, input_ids, attention_mask):
-        # Extract CLS embedding from the last hidden state
+        # Extract CLS embedding from last layer
         output = self.bert(input_ids=input_ids, attention_mask=attention_mask)
         cls_embedding = output.last_hidden_state[:, 0, :]  # CLS token embedding
         return cls_embedding
@@ -73,7 +73,7 @@ class MultimodalTransformer(nn.Module):
         )
 
         # Combine both embeddings
-        self.combined_embed_size = 256 * 2  # 256 from time series, 256 from text
+        self.combined_embed_size = 256 * 2  #can change this if needed
 
         # Transformer encoder for combined embeddings
         self.encoder_layer = nn.TransformerEncoderLayer(
@@ -84,17 +84,16 @@ class MultimodalTransformer(nn.Module):
         )
         self.transformer_encoder = nn.TransformerEncoder(self.encoder_layer, num_layers=6)
 
-        # Final classifier layer
-        self.classifier = nn.Linear(self.combined_embed_size, 1)
+        # Final classifier layers
+        self.classifier_mortality = nn.Linear(self.combined_embed_size, 1)  # Short-term mortality
+        self.classifier_readmission = nn.Linear(self.combined_embed_size, 1)  # Readmission
+        #add mechanical ventilation later
         
         # Activation
         self.sigmoid = nn.Sigmoid()
 
         # Loss function
         self.criterion = nn.BCEWithLogitsLoss()
-
-        # Weight initialization for final layer
-        nn.init.xavier_uniform_(self.classifier.weight)
 
     def forward(self, ts_inputs, ts_attention_mask, text_inputs, text_attention_mask):
         """
@@ -107,8 +106,8 @@ class MultimodalTransformer(nn.Module):
             text_attention_mask: Attention mask for BioBERT (batch_size, seq_len)
 
         Returns:
-            logits: Raw output from the classifier (batch_size,)
-            probs: Probability outputs after sigmoid activation (batch_size,)
+            logits_mortality: Raw output for short-term mortality (batch_size,)
+            logits_readmission: Raw output for readmission (batch_size,)
         """
         # Process structured data through BEHRT
         ts_outputs = self.BEHRT(input_ids=ts_inputs, attention_mask=ts_attention_mask)
@@ -127,120 +126,25 @@ class MultimodalTransformer(nn.Module):
         transformer_output = self.transformer_encoder(combined_embeddings)
         combined_cls_embedding = transformer_output[:, 0, :]  # Extract [CLS] embedding
 
-        # Final classifier
-        logits = self.classifier(combined_cls_embedding).squeeze(-1)
-        probs = self.sigmoid(logits)
+        # Final classifier outputs for the two predictions
+        logits_mortality = self.classifier_mortality(combined_cls_embedding).squeeze(-1)
+        logits_readmission = self.classifier_readmission(combined_cls_embedding).squeeze(-1)
 
-        return logits, probs
+        return logits_mortality, logits_readmission
 
-    def compute_loss(self, logits, labels):
+    def compute_loss(self, logits_mortality, logits_readmission, labels):
         """
         Compute BCE loss for the given logits and labels.
 
         Args:
-            logits: Raw output from the classifier (batch_size,)
-            labels: Ground truth labels (batch_size,)
+            logits_mortality: Raw output for short-term mortality (batch_size,)
+            logits_readmission: Raw output for readmission (batch_size,)
+            labels: Ground truth labels for both predictions (batch_size, 2)
 
         Returns:
-            loss: Computed loss value
+            loss: Combined loss value for both predictions
         """
-        loss = self.criterion(logits, labels)
+        loss_mortality = self.criterion(logits_mortality, labels[:, 0])
+        loss_readmission = self.criterion(logits_readmission, labels[:, 1])
+        loss = loss_mortality + loss_readmission
         return loss
-
-    def get_l2_regularization(self):
-        """
-        Compute L2 regularization for the classifier weights.
-
-        Returns:
-            l2_reg: L2 regularization value
-        """
-        l2_reg = torch.tensor(0., device=self.device)
-        for param in self.classifier.parameters():
-            l2_reg += param.norm(2)
-        return l2_reg
-
-
-# Training pipeline integrating BEHRT and BioClinicalBERT
-def train_pipeline():
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-    # Load structured data for BEHRT
-    structured_data = pd.read_csv('structured_first_admissions.csv')
-
-    # Preprocess structured data (encode categorical variables, etc.)
-    structured_data['age'] = structured_data['age'].astype(int)
-    structured_data['admission_location'] = structured_data['ADMISSION_LOCATION'].astype('category').cat.codes
-    structured_data['discharge_location'] = structured_data['DISCHARGE_LOCATION'].astype('category').cat.codes
-    structured_data['gender'] = structured_data['GENDER'].astype('category').cat.codes
-    structured_data['ethnicity'] = structured_data['ETHNICITY'].astype('category').cat.codes
-    structured_data['insurance'] = structured_data['INSURANCE'].astype('category').cat.codes
-
-    # Define parameters for BEHRT
-    num_diseases = len(structured_data['DIAGNOSIS'].unique())
-    num_ages = structured_data['age'].nunique()
-    num_segments = 2
-    num_admission_locs = structured_data['admission_location'].nunique()
-    num_discharge_locs = structured_data['discharge_location'].nunique()
-    num_genders = structured_data['gender'].nunique()
-    num_ethnicities = structured_data['ethnicity'].nunique()
-    num_insurances = structured_data['insurance'].nunique()
-
-    # Initialize BEHRT
-    behrt_model = BEHRTModel(
-        num_diseases=num_diseases,
-        num_ages=num_ages,
-        num_segments=num_segments,
-        num_admission_locs=num_admission_locs,
-        num_discharge_locs=num_discharge_locs,
-        num_genders=num_genders,
-        num_ethnicities=num_ethnicities,
-        num_insurances=num_insurances,
-    ).to(device)
-
-    # Load unstructured data for BioClinicalBERT
-    unstructured_data = pd.read_csv('unstructured_first_admissions.csv')  # Replace with your actual unstructured data file
-    notes = unstructured_data[unstructured_data['CATEGORY'] == 'Discharge summary']
-    notes['TEXT'] = notes['TEXT'].fillna('')
-
-    tokenizer = AutoTokenizer.from_pretrained('emilyalsentzer/Bio_ClinicalBERT')
-    tokenized_notes = tokenizer(
-        list(notes['TEXT']),
-        max_length=512,
-        truncation=True,
-        padding=True,
-        return_tensors='pt'
-    )
-
-    note_dataset = TensorDataset(
-        tokenized_notes['input_ids'],
-        tokenized_notes['attention_mask']
-    )
-    note_dataloader = DataLoader(note_dataset, batch_size=32, shuffle=True)
-
-    # Initialize BioClinicalBERT
-    biobert_model = BertModel.from_pretrained('emilyalsentzer/Bio_ClinicalBERT')
-    biobert_ft_model = BioClinicalBERT_FT(biobert_model, biobert_model.config, device).to(device)
-
-    # Initialize multimodal model
-    multimodal_model = MultimodalModel(behrt_hidden_size=768, biobert_hidden_size=768).to(device)
-
-    print("BEHRT and BioClinicalBERT models initialized.")
-    print("Starting multimodal training pipeline...")
-
-    # Placeholder for combined training logic
-    for structured_batch, unstructured_batch in zip(DataLoader(...), note_dataloader):
-        # Process structured data through BEHRT
-        structured_inputs = ...  # Prepare structured inputs for BEHRT
-        behrt_cls = behrt_model(*structured_inputs)  # Extract BEHRT CLS embeddings
-
-        # Process unstructured data through BioClinicalBERT
-        input_ids, attention_mask = unstructured_batch
-        input_ids, attention_mask = input_ids.to(device), attention_mask.to(device)
-        biobert_cls = biobert_ft_model(input_ids, attention_mask)  # Extract BioClinicalBERT CLS embeddings
-
-        # Combine embeddings and predict
-        logits, probs = multimodal_model(behrt_cls, biobert_cls)
-        # Compute loss and update weights (add loss logic)
-
-if __name__ == "__main__":
-    train_pipeline()
