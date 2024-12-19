@@ -321,7 +321,7 @@ bce_loss_ventilation = nn.BCEWithLogitsLoss(pos_weight=class_weights_tensor_vent
 # 4. Training Loop
 epochs = 30
 for epoch in range(epochs):
-    model.train()  # Set model to training mode
+    model.train() 
     total_loss = 0.0
     for batch in dataloader:
         input_ids, age_ids, segment_ids, admission_loc_ids, discharge_loc_ids, \
