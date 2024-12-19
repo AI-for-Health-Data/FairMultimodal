@@ -67,7 +67,6 @@ merged_data['ventilation_within_6_hours'] = merged_data['ventilation_within_6_ho
 first_admissions = merged_data.sort_values(by=['subject_id', 'ADMITTIME']).groupby('subject_id').first().reset_index()
 
 # Update the columns to reflect any positive case for each patient across all admissions
-# Using transform to propagate the maximum of any occurrence of short-term mortality, readmission, and ventilation
 first_admissions['short_term_mortality'] = merged_data.groupby('subject_id')['short_term_mortality'].transform('max')
 first_admissions['readmitted_within_30_days'] = merged_data.groupby('subject_id')['readmitted_within_30_days'].transform('max')
 first_admissions['ventilation_within_6_hours'] = merged_data.groupby('subject_id')['ventilation_within_6_hours'].transform('max')
@@ -228,8 +227,8 @@ first_admissions = reverse_one_hot(first_admissions, 'age_bucket', 'age_bucket')
 def create_summary_table(column_name, gender_column='GENDER'):
     # Group by the specified column and gender
     summary = first_admissions.groupby([column_name, gender_column]).size().unstack(fill_value=0)
-    summary['Total'] = summary.sum(axis=1)  # Calculate total for each category
-    summary['Percentage'] = (summary['Total'] / first_admissions.shape[0]) * 100  # Calculate percentage
+    summary['Total'] = summary.sum(axis=1)  
+    summary['Percentage'] = (summary['Total'] / first_admissions.shape[0]) * 100 
     return summary
 
 # Ethnicity summary by gender
