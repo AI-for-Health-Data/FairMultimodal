@@ -3,29 +3,32 @@ import pandas as pd
 import numpy as np
 import torch
 import torch.nn as nn
+from torch.optim import Adam
 from transformers import BertModel, BertConfig, AutoTokenizer
 from torch.utils.data import DataLoader, TensorDataset
 
-# BioClinicalBERT Model
+# Define the BioClinicalBERT Fine-tuned Model
 class BioClinicalBERT_FT(nn.Module):
     def __init__(self, BioBert, BioBertConfig, device):
         super(BioClinicalBERT_FT, self).__init__()
         self.BioBert = BioBert
         self.device = device
+        self.config = BioBertConfig  
 
     def forward(self, input_ids, attention_mask):
-        # Extract CLS embedding from the last layer
+        # Extract CLS embedding from the last hidden state
         output = self.BioBert(input_ids=input_ids, attention_mask=attention_mask)
-        cls_embedding = output.last_hidden_state[:, 0, :]  # CLS token embedding
+        cls_embedding = output.last_hidden_state[:, 0, :]  
         return cls_embedding
 
-# BEHRT Model
+# Define the BEHRT Model
 class BEHRTModel(nn.Module):
     def __init__(self, num_diseases, num_ages, num_segments, num_admission_locs, num_discharge_locs, 
                  num_genders, num_ethnicities, num_insurances, hidden_size=768):
         super(BEHRTModel, self).__init__()
-
-        config = BertConfig(
+        
+        # Store the configuration
+        self.config = BertConfig(
             vocab_size=num_diseases + num_ages + num_segments + num_admission_locs + num_discharge_locs + 2,
             hidden_size=hidden_size,
             num_hidden_layers=12,
@@ -36,115 +39,142 @@ class BEHRTModel(nn.Module):
             hidden_dropout_prob=0.1,
             attention_probs_dropout_prob=0.1
         )
-        self.bert = BertModel(config)
+        self.bert = BertModel(self.config)
 
     def forward(self, input_ids, attention_mask):
-        # Extract CLS embedding from last layer
+        # Extract CLS embedding from the last hidden state
         output = self.bert(input_ids=input_ids, attention_mask=attention_mask)
-        cls_embedding = output.last_hidden_state[:, 0, :]  # CLS token embedding
+        cls_embedding = output.last_hidden_state[:, 0, :] 
         return cls_embedding
 
+# Define the Multimodal Transformer model
 class MultimodalTransformer(nn.Module):
     def __init__(self, BioBert, BEHRT, device):
         super(MultimodalTransformer, self).__init__()
-
-        # Initialize BioClinicalBERT and BEHRT
         self.BioBert = BioBert
         self.BEHRT = BEHRT
         self.device = device
 
-        # Time series: BEHRT-specific embedding size
         self.ts_embed_size = BEHRT.config.hidden_size
-
-        # Text: BioClinicalBERT-specific embedding size
         self.text_embed_size = BioBert.config.hidden_size
 
-        # Projection layers for aligning embeddings from BEHRT and BioClinicalBERT
+        # Projection layers for embeddings
         self.ts_projector = nn.Sequential(
-            nn.Linear(self.ts_embed_size, 512, bias=False),
-            nn.ReLU(),
-            nn.Linear(512, 256, bias=False)
+            nn.Linear(self.ts_embed_size, 256),
+            nn.ReLU()
         )
-
         self.text_projector = nn.Sequential(
-            nn.Linear(self.text_embed_size, 512, bias=False),
-            nn.ReLU(),
-            nn.Linear(512, 256, bias=False)
+            nn.Linear(self.text_embed_size, 256),
+            nn.ReLU()
         )
 
         # Combine both embeddings
-        self.combined_embed_size = 256 * 2  #can change this if needed
+        self.combined_embed_size = 512
+        self.classifier = nn.Linear(self.combined_embed_size, 1)
 
-        # Transformer encoder for combined embeddings
-        self.encoder_layer = nn.TransformerEncoderLayer(
-            d_model=self.combined_embed_size, 
-            nhead=4, 
-            dim_feedforward=512, 
-            batch_first=True
-        )
-        self.transformer_encoder = nn.TransformerEncoder(self.encoder_layer, num_layers=6)
-
-        # Final classifier layers
-        self.classifier_mortality = nn.Linear(self.combined_embed_size, 1)  # Short-term mortality
-        self.classifier_readmission = nn.Linear(self.combined_embed_size, 1)  # Readmission
-        #add mechanical ventilation later
-        
-        # Activation
         self.sigmoid = nn.Sigmoid()
 
-        # Loss function
-        self.criterion = nn.BCEWithLogitsLoss()
-
     def forward(self, ts_inputs, ts_attention_mask, text_inputs, text_attention_mask):
-        """
-        Forward pass for the multimodal transformer.
-
-        Args:
-            ts_inputs: Structured data tokenized for BEHRT (batch_size, seq_len)
-            ts_attention_mask: Attention mask for BEHRT (batch_size, seq_len)
-            text_inputs: Text data tokenized for BioBERT (batch_size, seq_len)
-            text_attention_mask: Attention mask for BioBERT (batch_size, seq_len)
-
-        Returns:
-            logits_mortality: Raw output for short-term mortality (batch_size,)
-            logits_readmission: Raw output for readmission (batch_size,)
-        """
-        # Process structured data through BEHRT
+        # BEHRT
         ts_outputs = self.BEHRT(input_ids=ts_inputs, attention_mask=ts_attention_mask)
-        ts_cls_embedding = ts_outputs.last_hidden_state[:, 0, :]  # Extract [CLS] embedding
-        ts_projected = self.ts_projector(ts_cls_embedding)  # Project to lower dimension
+        ts_cls_embedding = ts_outputs.last_hidden_state[:, 0, :]
+        ts_projected = self.ts_projector(ts_cls_embedding)
 
-        # Process text data through BioClinicalBERT
+        # BioBERT
         text_outputs = self.BioBert(input_ids=text_inputs, attention_mask=text_attention_mask)
-        text_cls_embedding = text_outputs.last_hidden_state[:, 0, :]  # Extract [CLS] embedding
-        text_projected = self.text_projector(text_cls_embedding)  # Project to lower dimension
+        text_cls_embedding = text_outputs.last_hidden_state[:, 0, :]
+        text_projected = self.text_projector(text_cls_embedding)
 
-        # Combine projected embeddings
-        combined_embeddings = torch.cat((ts_projected, text_projected), dim=1).unsqueeze(1)
+        # Combine embeddings
+        combined_embeddings = torch.cat((ts_projected, text_projected), dim=1)
+        logits = self.classifier(combined_embeddings).squeeze(-1)
+        probs = self.sigmoid(logits)
+        return logits, probs
 
-        # Transformer encoder for combined embeddings
-        transformer_output = self.transformer_encoder(combined_embeddings)
-        combined_cls_embedding = transformer_output[:, 0, :]  # Extract [CLS] embedding
+def train_pipeline():
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-        # Final classifier outputs for the two predictions
-        logits_mortality = self.classifier_mortality(combined_cls_embedding).squeeze(-1)
-        logits_readmission = self.classifier_readmission(combined_cls_embedding).squeeze(-1)
+    # Load structured data
+    structured_data = pd.read_csv('structured_first_admissions.csv').sample(100)
+    print("Columns in structured_data:", structured_data.columns)
 
-        return logits_mortality, logits_readmission
+    # Preprocess structured data
+    structured_data['age'] = structured_data['age'].astype(int)
+    structured_data['ADMISSION_LOCATION'] = structured_data['ADMISSION_LOCATION'].astype('category').cat.codes
+    structured_data['DISCHARGE_LOCATION'] = structured_data['DISCHARGE_LOCATION'].astype('category').cat.codes
+    structured_data['GENDER'] = structured_data['GENDER'].astype('category').cat.codes
+    structured_data['ETHNICITY'] = structured_data['ETHNICITY'].astype('category').cat.codes
+    structured_data['INSURANCE'] = structured_data['INSURANCE'].astype('category').cat.codes
 
-    def compute_loss(self, logits_mortality, logits_readmission, labels):
-        """
-        Compute BCE loss for the given logits and labels.
+    structured_inputs = torch.tensor(structured_data[['age']].values, dtype=torch.long)
+    structured_attention_mask = torch.ones_like(structured_inputs)
+    structured_dataset = TensorDataset(structured_inputs, structured_attention_mask)
+    structured_dataloader = DataLoader(structured_dataset, batch_size=32, shuffle=True)
 
-        Args:
-            logits_mortality: Raw output for short-term mortality (batch_size,)
-            logits_readmission: Raw output for readmission (batch_size,)
-            labels: Ground truth labels for both predictions (batch_size, 2)
+    # Initialize BEHRT
+    behrt_model = BertModel(BertConfig(hidden_size=768))
 
-        Returns:
-            loss: Combined loss value for both predictions
-        """
-        loss_mortality = self.criterion(logits_mortality, labels[:, 0])
-        loss_readmission = self.criterion(logits_readmission, labels[:, 1])
-        loss = loss_mortality + loss_readmission
-        return loss
+    # Load unstructured data
+    unstructured_data = pd.read_csv('first_notes_unstructured.csv').sample(100)
+    print("Columns in unstructured_data:", unstructured_data.columns)
+
+    if 'note' not in unstructured_data.columns:
+        raise KeyError("The 'note' column is missing from the unstructured data. Please check the file.")
+
+    tokenizer = AutoTokenizer.from_pretrained('emilyalsentzer/Bio_ClinicalBERT')
+    tokenized_notes = tokenizer(
+        list(unstructured_data['note']),
+        max_length=512,
+        truncation=True,
+        padding=True,
+        return_tensors='pt'
+    )
+
+    note_dataset = TensorDataset(
+        tokenized_notes['input_ids'],
+        tokenized_notes['attention_mask']
+    )
+    note_dataloader = DataLoader(note_dataset, batch_size=32, shuffle=True)
+
+    # Initialize BioClinicalBERT
+    biobert_model = BertModel.from_pretrained('emilyalsentzer/Bio_ClinicalBERT')
+
+    # Initialize Multimodal Model
+    multimodal_model = MultimodalTransformer(BioBert=biobert_model, BEHRT=behrt_model, device=device).to(device)
+
+    # Training setup
+    optimizer = torch.optim.Adam(multimodal_model.parameters(), lr=1e-4)
+    criterion = nn.BCEWithLogitsLoss()
+    num_epochs = 5
+
+    # Training loop
+    for epoch in range(num_epochs):
+        multimodal_model.train()
+        for (structured_batch, unstructured_batch) in zip(structured_dataloader, note_dataloader):
+            structured_inputs, structured_attention_mask = structured_batch
+            unstructured_inputs, unstructured_attention_mask = unstructured_batch
+
+            structured_inputs = structured_inputs.to(device)
+            structured_attention_mask = structured_attention_mask.to(device)
+            unstructured_inputs = unstructured_inputs.to(device)
+            unstructured_attention_mask = unstructured_attention_mask.to(device)
+
+            optimizer.zero_grad()
+
+            logits, probs = multimodal_model(
+                ts_inputs=structured_inputs,
+                ts_attention_mask=structured_attention_mask,
+                text_inputs=unstructured_inputs,
+                text_attention_mask=unstructured_attention_mask
+            )
+
+            labels = torch.randint(0, 2, (logits.size(0),), dtype=torch.float32).to(device)
+            loss = criterion(logits, labels)
+
+            loss.backward()
+            optimizer.step()
+
+            print(f"Epoch {epoch + 1}/{num_epochs}, Loss: {loss.item()}")
+
+if __name__ == "__main__":
+    train_pipeline()
