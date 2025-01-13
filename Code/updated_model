@@ -1,0 +1,232 @@
+import os
+import pandas as pd
+import numpy as np
+import torch
+import torch.nn as nn
+from transformers import BertModel, AutoTokenizer, BertConfig
+from torch.utils.data import DataLoader, TensorDataset
+from sklearn.metrics import precision_recall_fscore_support, roc_auc_score, average_precision_score
+from sklearn.utils.class_weight import compute_class_weight
+
+class BioClinicalBERT_FT(nn.Module):
+    def __init__(self, BioBert):
+        super(BioClinicalBERT_FT, self).__init__()
+        self.BioBert = BioBert
+
+    def forward(self, input_ids, attention_mask):
+        output = self.BioBert(input_ids=input_ids, attention_mask=attention_mask)
+        cls_embedding = output.last_hidden_state[:, 0, :]  
+        return cls_embedding
+
+class BEHRTModel(nn.Module):
+    def __init__(self, hidden_size=768):
+        super(BEHRTModel, self).__init__()
+        self.config = BertConfig(
+            vocab_size=30522,
+            hidden_size=hidden_size,
+            num_hidden_layers=12,
+            num_attention_heads=12,
+            intermediate_size=3072,
+            max_position_embeddings=512,
+            type_vocab_size=2,
+            hidden_dropout_prob=0.1,
+            attention_probs_dropout_prob=0.1
+        )
+        self.bert = BertModel(self.config)
+
+    def forward(self, input_ids, attention_mask):
+        output = self.bert(input_ids=input_ids, attention_mask=attention_mask)
+        cls_embedding = output.last_hidden_state[:, 0, :]  
+        return cls_embedding
+
+class MultimodalTransformer(nn.Module):
+    def __init__(self, BioBert, BEHRT, device):
+        super(MultimodalTransformer, self).__init__()
+        self.BioBert = BioBert
+        self.BEHRT = BEHRT
+        self.device = device
+
+        # Accessing the correct hidden size from BEHRT and BioBERT
+        self.ts_embed_size = BEHRT.config.hidden_size
+        self.text_embed_size = BioBert.BioBert.config.hidden_size  # Corrected line
+
+        # Projection layers
+        self.ts_projector = nn.Sequential(
+            nn.Linear(self.ts_embed_size, 256),
+            nn.ReLU()
+        )
+        self.text_projector = nn.Sequential(
+            nn.Linear(self.text_embed_size, 256),
+            nn.ReLU()
+        )
+
+        self.combined_embed_size = 512
+        self.mortality_classifier = nn.Linear(self.combined_embed_size, 1)
+        self.readmission_classifier = nn.Linear(self.combined_embed_size, 1)
+
+    def forward(self, ts_inputs, ts_attention_mask, text_embeddings):
+        ts_cls_embedding = self.BEHRT(input_ids=ts_inputs, attention_mask=ts_attention_mask)
+        ts_projected = self.ts_projector(ts_cls_embedding)
+
+        text_projected = self.text_projector(text_embeddings)
+
+        combined_embeddings = torch.cat((ts_projected, text_projected), dim=1)
+        mortality_logits = self.mortality_classifier(combined_embeddings).squeeze(-1)
+        readmission_logits = self.readmission_classifier(combined_embeddings).squeeze(-1)
+
+        return mortality_logits, readmission_logits
+
+def process_note_chunks(notes, tokenizer, model, device):
+    cls_embeddings = []
+
+    for note in notes:
+        if note is not None and isinstance(note, str):  # Ensure the note is valid
+            tokenized = tokenizer(note, max_length=512, truncation=True, padding="max_length", return_tensors="pt")
+            input_ids = tokenized['input_ids'].to(device)
+            attention_mask = tokenized['attention_mask'].to(device)
+
+            with torch.no_grad():
+                cls_embedding = model(input_ids=input_ids, attention_mask=attention_mask)
+                cls_embeddings.append(cls_embedding)
+
+    # If no embeddings are generated, return a zero tensor
+    if len(cls_embeddings) > 0:
+        return torch.cat(cls_embeddings, dim=0)  
+    else:
+        return torch.zeros((1, model.BioBert.config.hidden_size), device=device)
+
+def apply_bioclinicalbert_on_chunks(data, note_columns, tokenizer, model, device):
+    model.eval()
+    embeddings = []
+
+    for idx, row in data.iterrows():
+        note_chunks = [row[col] for col in note_columns if pd.notnull(row[col])]
+
+        # Generate patient embedding
+        patient_embedding = process_note_chunks(note_chunks, tokenizer, model, device)
+        embeddings.append(patient_embedding.cpu().numpy())
+
+    # Stack embeddings and ensure dimensions are consistent
+    return np.vstack(embeddings)
+
+
+# Training Pipeline
+def train_pipeline():
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    # Load structured data
+    structured_data = pd.read_csv('structured_first_icustays.csv').sample(100)
+    structured_data['age'] = structured_data['age'].astype(int)
+
+    # Prepare structured inputs
+    structured_inputs = torch.tensor(structured_data[['age']].values, dtype=torch.long)
+    structured_attention_mask = torch.ones_like(structured_inputs)
+    structured_labels_mortality = torch.tensor(structured_data['short_term_mortality'].values, dtype=torch.float32)
+    structured_labels_readmission = torch.tensor(structured_data['readmission_within_30_days'].values, dtype=torch.float32)
+
+    structured_dataset = TensorDataset(structured_inputs, structured_attention_mask, structured_labels_mortality, structured_labels_readmission)
+    structured_dataloader = DataLoader(structured_dataset, batch_size=32, shuffle=True)
+
+    # Load unstructured data
+    unstructured_data = pd.read_csv('first_notes_unstructured.csv').sample(100)
+    note_columns = [col for col in unstructured_data.columns if col.startswith('note_')]
+
+    tokenizer = AutoTokenizer.from_pretrained("emilyalsentzer/Bio_ClinicalBERT")
+    biobert_model = BioClinicalBERT_FT(BertModel.from_pretrained("emilyalsentzer/Bio_ClinicalBERT")).to(device)
+
+    # Process note chunks for all patients
+    print("Processing note chunks...")
+    text_embeddings = apply_bioclinicalbert_on_chunks(unstructured_data, note_columns, tokenizer, biobert_model, device)
+    text_embeddings = torch.tensor(text_embeddings, dtype=torch.float32).to(device)
+
+    # Prepare unstructured labels
+    unstructured_labels_mortality = torch.tensor(unstructured_data['short_term_mortality'].values, dtype=torch.float32).to(device)
+    unstructured_labels_readmission = torch.tensor(unstructured_data['readmitted_within_30_days'].values, dtype=torch.float32).to(device)
+
+    unstructured_dataset = TensorDataset(text_embeddings, unstructured_labels_mortality, unstructured_labels_readmission)
+    unstructured_dataloader = DataLoader(unstructured_dataset, batch_size=32, shuffle=True)
+
+    # Initialize BEHRT model
+    behrt_model = BEHRTModel()
+
+    # Initialize Multimodal Model
+    multimodal_model = MultimodalTransformer(BioBert=biobert_model, BEHRT=behrt_model, device=device).to(device)
+
+    # Training setup
+    optimizer = torch.optim.Adam(multimodal_model.parameters(), lr=1e-4)
+    criterion = nn.BCEWithLogitsLoss()
+    num_epochs = 5
+
+    for epoch in range(num_epochs):
+        multimodal_model.train()
+        for (structured_batch, unstructured_batch) in zip(structured_dataloader, unstructured_dataloader):
+            ts_inputs, ts_attention_mask, labels_mortality, labels_readmission = structured_batch
+            text_embeddings, text_labels_mortality, text_labels_readmission = unstructured_batch
+
+            ts_inputs, ts_attention_mask, text_embeddings, labels_mortality, labels_readmission = \
+                ts_inputs.to(device), ts_attention_mask.to(device), text_embeddings.to(device), labels_mortality.to(device), labels_readmission.to(device)
+
+            optimizer.zero_grad()
+
+            mortality_logits, readmission_logits = multimodal_model(
+                ts_inputs=ts_inputs,
+                ts_attention_mask=ts_attention_mask,
+                text_embeddings=text_embeddings
+            )
+
+            loss_mortality = criterion(mortality_logits, labels_mortality)
+            loss_readmission = criterion(readmission_logits, labels_readmission)
+            loss = loss_mortality + loss_readmission
+
+            loss.backward()
+            optimizer.step()
+
+            print(f"Epoch {epoch + 1}/{num_epochs}, Loss: {loss.item()}")
+
+        # Evaluate model
+        print(f"Epoch {epoch + 1} evaluation...")
+        multimodal_model.eval()
+        all_mortality_logits, all_readmission_logits, all_labels_mortality, all_labels_readmission = [], [], [], []
+        with torch.no_grad():
+            for (structured_batch, unstructured_batch) in zip(structured_dataloader, unstructured_dataloader):
+                ts_inputs, ts_attention_mask, labels_mortality, labels_readmission = structured_batch
+                text_embeddings, text_labels_mortality, text_labels_readmission = unstructured_batch
+
+                ts_inputs, ts_attention_mask, text_embeddings, labels_mortality, labels_readmission = \
+                    ts_inputs.to(device), ts_attention_mask.to(device), text_embeddings.to(device), labels_mortality.to(device), labels_readmission.to(device)
+
+                mortality_logits, readmission_logits = multimodal_model(
+                    ts_inputs=ts_inputs,
+                    ts_attention_mask=ts_attention_mask,
+                    text_embeddings=text_embeddings
+                )
+
+                all_mortality_logits.append(mortality_logits.cpu().numpy())
+                all_readmission_logits.append(readmission_logits.cpu().numpy())
+                all_labels_mortality.append(labels_mortality.cpu().numpy())
+                all_labels_readmission.append(labels_readmission.cpu().numpy())
+
+        all_mortality_logits = np.concatenate(all_mortality_logits)
+        all_readmission_logits = np.concatenate(all_readmission_logits)
+        all_labels_mortality = np.concatenate(all_labels_mortality)
+        all_labels_readmission = np.concatenate(all_labels_readmission)
+
+        # Metrics for mortality
+        precision_mortality, recall_mortality, f1_mortality, _ = precision_recall_fscore_support(
+            all_labels_mortality, all_mortality_logits > 0.5, average='binary')
+        auroc_mortality = roc_auc_score(all_labels_mortality, all_mortality_logits)
+        auprc_mortality = average_precision_score(all_labels_mortality, all_mortality_logits)
+
+        # Metrics for readmission
+        precision_readmission, recall_readmission, f1_readmission, _ = precision_recall_fscore_support(
+            all_labels_readmission, all_readmission_logits > 0.5, average='binary')
+        auroc_readmission = roc_auc_score(all_labels_readmission, all_readmission_logits)
+        auprc_readmission = average_precision_score(all_labels_readmission, all_readmission_logits)
+
+        print(f"Mortality - Precision: {precision_mortality:.4f}, Recall: {recall_mortality:.4f}, "
+              f"F1: {f1_mortality:.4f}, AUROC: {auroc_mortality:.4f}, AUPRC: {auprc_mortality:.4f}")
+        print(f"Readmission - Precision: {precision_readmission:.4f}, Recall: {recall_readmission:.4f}, "
+              f"F1: {f1_readmission:.4f}, AUROC: {auroc_readmission:.4f}, AUPRC: {auprc_readmission:.4f}")
+
+if __name__ == "__main__":
+    train_pipeline()
