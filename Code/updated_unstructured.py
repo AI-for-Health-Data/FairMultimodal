@@ -4,11 +4,11 @@ import spacy
 
 # Load SpaCy English tokenizer
 nlp = spacy.load("en_core_web_sm")
-nlp.max_length = 5000000 
+nlp.max_length = 5000000  
 
 # Function to calculate age
-def calculate_age(dob, admittime):
-    return admittime.year - dob.year - ((admittime.month, admittime.day) < (dob.month, dob.day))
+def calculate_age(dob, intime):
+    return intime.year - dob.year - ((intime.month, intime.day) < (dob.month, dob.day))
 
 # Function to categorize age
 def categorize_age(age):
@@ -21,49 +21,38 @@ def categorize_age(age):
     else:
         return '70-89'
 
-# Function to categorize ethnicity
-def categorize_ethnicity(ethnicity):
-    ethnicity = ethnicity.upper()
-    if ethnicity in [
-        'WHITE', 'WHITE - RUSSIAN', 'WHITE - OTHER EUROPEAN', 
-        'WHITE - BRAZILIAN', 'WHITE - EASTERN EUROPEAN'
-    ]:
-        return 'White'
-    elif ethnicity in [
-        'BLACK/AFRICAN AMERICAN', 'BLACK/CAPE VERDEAN', 
-        'BLACK/HAITIAN', 'BLACK/AFRICAN', 'CARIBBEAN ISLAND'
-    ]:
-        return 'Black'
-    elif ethnicity in [
-        'HISPANIC OR LATINO', 'HISPANIC/LATINO - PUERTO RICAN', 
-        'HISPANIC/LATINO - DOMINICAN', 'HISPANIC/LATINO - GUATEMALAN', 
-        'HISPANIC/LATINO - CUBAN', 'HISPANIC/LATINO - SALVADORAN', 
-        'HISPANIC/LATINO - CENTRAL AMERICAN (OTHER)', 
-        'HISPANIC/LATINO - MEXICAN', 'HISPANIC/LATINO - COLOMBIAN', 
-        'HISPANIC/LATINO - HONDURAN'
-    ]:
-        return 'Hispanic'
-    elif ethnicity in [
-        'ASIAN', 'ASIAN - CHINESE', 'ASIAN - ASIAN INDIAN', 
-        'ASIAN - VIETNAMESE', 'ASIAN - FILIPINO', 'ASIAN - CAMBODIAN', 
-        'ASIAN - OTHER', 'ASIAN - KOREAN', 'ASIAN - JAPANESE', 'ASIAN - THAI'
-    ]:
-        return 'Asian'
-    else:
-        return 'Other'
+# Function to calculate short-term mortality for ICU stays using ICUSTAY_ID
+def calculate_short_term_mortality(icu_stays):
+    # Mark as 1 if DEATHTIME exists within the ICU stay, otherwise 0
+    icu_stays['short_term_mortality'] = icu_stays['DEATHTIME'].notnull().astype(int)
+    return icu_stays
 
-# Function to categorize insurance
-def categorize_insurance(insurance):
-    if 'MEDICARE' in insurance.upper():
-        return 'Medicare'
-    elif 'PRIVATE' in insurance.upper():
-        return 'Private'
-    elif 'MEDICAID' in insurance.upper():
-        return 'Medicaid'
-    elif 'SELF PAY' in insurance.upper():
-        return 'Self Pay'
-    else:
-        return 'Government'
+# Function to calculate short-term mortality
+def calculate_short_term_mortality(icu_stays):
+    # Mark as 1 if DEATHTIME exists within the ICU stay, otherwise 0
+    icu_stays['short_term_mortality'] = icu_stays['DEATHTIME'].notnull().astype(int)
+    return icu_stays
+
+# Function to calculate readmission within 30 days considering all ICU stays
+def calculate_readmission(icu_stays):
+    # Sort by subject and ICU admission time
+    icu_stays = icu_stays.sort_values(by=['subject_id', 'ICUSTAY_ID'])
+    
+    # Calculate the difference between OUTTIME of the current ICU stay and INTIME of the next ICU stay
+    icu_stays['time_diff'] = (
+        icu_stays.groupby('subject_id')['INTIME']
+        .shift(-1) - icu_stays['OUTTIME']
+    ).dt.days
+    
+    # Mark readmission within 30 days
+    icu_stays['readmitted_within_30_days'] = (
+        (icu_stays['time_diff'] <= 30) & (icu_stays['time_diff'] > 0)
+    ).astype(int)
+    
+    # Fill NaN with 0 for patients with only one ICU stay
+    icu_stays['readmitted_within_30_days'] = icu_stays['readmitted_within_30_days'].fillna(0).astype(int)
+    
+    return icu_stays
 
 # Function to split extremely long text manually
 def split_large_text(text, max_chunk_size=1000000):
@@ -72,7 +61,7 @@ def split_large_text(text, max_chunk_size=1000000):
 # Function to split notes into chunks of max_tokens
 def split_notes(note, max_tokens=500):
     if len(note) > nlp.max_length:
-        chunks = split_large_text(note)  
+        chunks = split_large_text(note)
     else:
         chunks = [note]
     token_chunks = []
@@ -98,14 +87,16 @@ def process_notes(data, note_column='note', max_tokens=500):
     data = data.drop(columns=[note_column, 'note_chunks'])
     return data
 
-# Function to preprocess data
-def preprocess_data(noteevents_file, admissions_file, patients_file, output_file, max_tokens=500):
+# Updated Preprocessing Function
+def preprocess_icu_data(noteevents_file, icustays_file, patients_file, admissions_file, output_file, max_tokens=500):
     if not os.path.exists(noteevents_file):
         raise FileNotFoundError(f"NOTEEVENTS file {noteevents_file} not found.")
-    if not os.path.exists(admissions_file):
-        raise FileNotFoundError(f"ADMISSIONS file {admissions_file} not found.")
+    if not os.path.exists(icustays_file):
+        raise FileNotFoundError(f"ICUSTAYS file {icustays_file} not found.")
     if not os.path.exists(patients_file):
         raise FileNotFoundError(f"PATIENTS file {patients_file} not found.")
+    if not os.path.exists(admissions_file):
+        raise FileNotFoundError(f"ADMISSIONS file {admissions_file} not found.")
 
     # Load NOTEEVENTS data
     print(f"Loading data from {noteevents_file}...")
@@ -113,13 +104,21 @@ def preprocess_data(noteevents_file, admissions_file, patients_file, output_file
     noteevents.rename(columns={'SUBJECT_ID': 'subject_id', 'HADM_ID': 'hadm_id'}, inplace=True)
     noteevents['TEXT'] = noteevents['TEXT'].fillna('')
 
+    # Load ICUSTAYS data
+    print(f"Loading data from {icustays_file}...")
+    icu_stays = pd.read_csv(icustays_file, compression='gzip')
+    icu_stays.rename(columns={'SUBJECT_ID': 'subject_id'}, inplace=True)
+    icu_stays['INTIME'] = pd.to_datetime(icu_stays['INTIME'])
+    icu_stays['OUTTIME'] = pd.to_datetime(icu_stays['OUTTIME'])
+
     # Load ADMISSIONS data
     print(f"Loading data from {admissions_file}...")
     admissions = pd.read_csv(admissions_file, compression='gzip')
     admissions.rename(columns={'SUBJECT_ID': 'subject_id', 'HADM_ID': 'hadm_id'}, inplace=True)
-    admissions['ADMITTIME'] = pd.to_datetime(admissions['ADMITTIME'])
-    admissions['DISCHTIME'] = pd.to_datetime(admissions['DISCHTIME'])
     admissions['DEATHTIME'] = pd.to_datetime(admissions['DEATHTIME'])
+
+    # Merge ICUSTAYS with ADMISSIONS to include HADM_ID and DEATHTIME
+    icu_stays = pd.merge(icu_stays, admissions[['subject_id', 'hadm_id', 'DEATHTIME']], on='subject_id', how='left')
 
     # Load PATIENTS data
     print(f"Loading data from {patients_file}...")
@@ -127,38 +126,25 @@ def preprocess_data(noteevents_file, admissions_file, patients_file, output_file
     patients.rename(columns={'SUBJECT_ID': 'subject_id'}, inplace=True)
     patients['DOB'] = pd.to_datetime(patients['DOB'])
 
-    # Merge PATIENTS and ADMISSIONS to calculate age
-    admissions = pd.merge(admissions, patients[['subject_id', 'DOB']], on='subject_id', how='left')
-    admissions['age'] = admissions.apply(lambda x: calculate_age(x['DOB'], x['ADMITTIME']), axis=1)
-    admissions = admissions[(admissions['age'] >= 15) & (admissions['age'] <= 90)]
-    admissions['age_bucket'] = admissions['age'].apply(categorize_age)
+    # Merge ICUSTAYS with PATIENTS to calculate age
+    icu_stays = pd.merge(icu_stays, patients[['subject_id', 'DOB']], on='subject_id', how='left')
+    icu_stays['age'] = icu_stays.apply(lambda x: calculate_age(x['DOB'], x['INTIME']), axis=1)
+    icu_stays = icu_stays[(icu_stays['age'] >= 15) & (icu_stays['age'] <= 90)]
+    icu_stays['age_bucket'] = icu_stays['age'].apply(categorize_age)
 
-    # Categorize ethnicity and insurance
-    admissions['categorized_ethnicity'] = admissions['ETHNICITY'].apply(categorize_ethnicity)
-    admissions['categorized_insurance'] = admissions['INSURANCE'].apply(categorize_insurance)
+    # Calculate short-term mortality and readmission
+    print("Calculating short-term mortality and readmission...")
+    icu_stays = calculate_short_term_mortality(icu_stays)
+    icu_stays = calculate_readmission(icu_stays)
 
-    # Calculate short-term mortality
-    admissions['short_term_mortality'] = (
-        (admissions['DEATHTIME'] - admissions['DISCHTIME']).dt.days <= 30
-    ).astype(int)
+    # Extract the first ICU stay for each patient
+    print("Extracting first ICU stay for each patient...")
+    first_icu_stays = icu_stays.groupby('subject_id').first().reset_index()
 
-    # Calculate readmission within 30 days
-    admissions = admissions.sort_values(by=['subject_id', 'ADMITTIME'])
-    admissions['readmitted_within_30_days'] = (
-        admissions.groupby('subject_id')['ADMITTIME'].diff().dt.days <= 30
-    ).astype(int)
-    admissions['readmitted_within_30_days'] = admissions.groupby('subject_id')['readmitted_within_30_days'].transform('max')
+    # Merge NOTEEVENTS with first ICU stays
+    combined_data = noteevents.merge(first_icu_stays, on=['subject_id', 'hadm_id'], how='inner')
 
-    # Update short-term mortality to reflect any positive case across all admissions
-    admissions['short_term_mortality'] = admissions.groupby('subject_id')['short_term_mortality'].transform('max')
-
-    # Extract the first admission for each patient
-    first_admissions = admissions.groupby('subject_id').first().reset_index()
-
-    # Merge NOTEEVENTS with first admissions
-    combined_data = noteevents.merge(first_admissions, on=['subject_id', 'hadm_id'], how='inner')
-
-    # Concatenate all notes for each patient's first admission
+    # Concatenate all notes for each patient's first ICU stay
     combined_data['note'] = combined_data.groupby('subject_id')['TEXT'].transform(lambda x: ' '.join(x))
 
     # Deduplicate to ensure one row per patient
@@ -175,41 +161,10 @@ def preprocess_data(noteevents_file, admissions_file, patients_file, output_file
 
 # Paths to input and output files
 noteevents_file = "NOTEEVENTS.csv.gz"
-admissions_file = "ADMISSIONS.csv.gz"
+icustays_file = "ICUSTAYS.csv.gz"
 patients_file = "PATIENTS.csv.gz"
-output_file = "processed_notes.csv"
+admissions_file = "ADMISSIONS.csv.gz"
+output_file = "processed_icu_notes.csv"
 
 # Run the preprocessing function
-preprocess_data(noteevents_file, admissions_file, patients_file, output_file, max_tokens=500)
-
-# Load the processed data
-output_file = "processed_notes.csv"
-data = pd.read_csv(output_file)
-
-# Verify the shape and columns of the output
-data_shape = data.shape
-data_columns = data.columns.tolist()
-
-# Count positive cases for mortality and readmission
-positive_mortality_count = data['short_term_mortality'].sum()
-positive_readmission_count = data['readmitted_within_30_days'].sum()
-
-data_shape, data_columns, positive_mortality_count, positive_readmission_count
-
-# Identify columns containing note chunks
-note_columns = [col for col in data.columns if col.startswith('note_')]
-
-# Calculate the number of non-null note chunks for each patient
-data['num_note_chunks'] = data[note_columns].notnull().sum(axis=1)
-
-# Display the distribution of note chunks per patient
-chunk_distribution = data['num_note_chunks'].value_counts().sort_index()
-
-print("Distribution of number of note chunks per patient:")
-print(chunk_distribution)
-
-# Save the chunk information for further analysis if needed
-data[['subject_id', 'num_note_chunks']].to_csv("note_chunks_per_patient.csv", index=False)
-
-# Preview the results for a few patients
-print(data[['subject_id', 'num_note_chunks']].head())
+preprocess_icu_data(noteevents_file, icustays_file, patients_file, admissions_file, output_file, max_tokens=500)
