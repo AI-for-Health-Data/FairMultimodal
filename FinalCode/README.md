@@ -34,7 +34,7 @@ This repository contains code and notebooks to preprocess structured and unstruc
 ## 3. Prediction on Unstructured Data
 
 - **Model:** BioClinicalBERT  
-- **File:** `FinalCode/biobert.py`  
+- **File:** `FinalCode/BioclinicalBert.py`  
 - **Details:**  
   - This script processes the unstructured dataset using the BioClinicalBERT model to predict the same outcomes (short-term mortality and readmission).  
   - The output of this process is saved in the file `unstruct.log`.
@@ -43,7 +43,7 @@ This repository contains code and notebooks to preprocess structured and unstruc
 
 ## 4. Multimodal Approach
 
-- **File:** `FinalCode/Run2.py`  
+- **File:** `FinalCode/Multimodal.py`  
 - **Details:**  
   - This script combines both structured and unstructured datasets to create a multimodal prediction model.  
   - The results from this run are stored in `Runresult.log`.
@@ -59,10 +59,10 @@ This repository contains code and notebooks to preprocess structured and unstruc
 
 2. **Run Predictions:**
    - For structured data, review the results in `BEHRT.ipynb`.
-   - For unstructured data, run the script `biobert.py` and check the output in `niobert.lof`.
+   - For unstructured data, run the script `BioclinicalBert.py` and check the output in `unstruct.log`.
 
 3. **Multimodal Prediction:**
-   - Execute `Run2.py` to run the multimodal prediction.  
+   - Execute `Multimodal.py` to run the multimodal prediction.  
    - Check the output in `Runresult.log`.
 
 
