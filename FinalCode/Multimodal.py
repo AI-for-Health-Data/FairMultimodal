@@ -16,7 +16,6 @@ from torch.utils.data import TensorDataset, DataLoader
 from transformers import BertModel, BertConfig, AutoTokenizer, AutoModel
 from sklearn.metrics import roc_auc_score, average_precision_score, f1_score, recall_score, precision_score
 
-### Helper Classes and Functions
 
 # Focal Loss Definition
 class FocalLoss(nn.Module):
@@ -167,8 +166,6 @@ def evaluate_model(model, dataloader, device, threshold=0.5):
         metrics[task] = {"aucroc": aucroc, "auprc": auprc, "f1": f1, "recall": recall, "precision": precision}
     return metrics, all_mort_logits, all_readm_logits
 
-
-### Model Definitions
 
 # BEHRT Model for Structured Data 
 class BEHRTModel(nn.Module):
@@ -324,11 +321,11 @@ def train_pipeline():
             if pd.notnull(row[col]) and isinstance(row[col], str) and row[col].strip():
                 return True
         return False
-    # For our training pipeline we now call the merged data "df_filtered"
+
     df_filtered = merged_df[merged_df.apply(has_valid_note, axis=1)].copy()
     print("After filtering, number of rows:", len(df_filtered))
 
-    # ----- Compute Aggregated Text Embeddings -----
+    # Compute Aggregated Text Embeddings 
     tokenizer = AutoTokenizer.from_pretrained("emilyalsentzer/Bio_ClinicalBERT")
     bioclinical_bert_base = BertModel.from_pretrained("emilyalsentzer/Bio_ClinicalBERT")
     bioclinical_bert_ft = BioClinicalBERT_FT(bioclinical_bert_base, bioclinical_bert_base.config, device).to(device)
@@ -340,8 +337,6 @@ def train_pipeline():
     print("Aggregated text embeddings shape:", aggregated_text_embeddings_np.shape)
     aggregated_text_embeddings_t = torch.tensor(aggregated_text_embeddings_np, dtype=torch.float32)
 
-    # ----- Prepare Structured Data -----
-    # List the expected categorical columns.
     categorical_columns = [
         "GENDER_struct",
         "ETHNICITY_struct",
@@ -349,7 +344,7 @@ def train_pipeline():
         "FIRST_WARDID_struct",
         "LAST_WARDID_struct"
     ]
-    # For each expected column, check if it exists. If not, create a default column (e.g., with zeros).
+    # For each expected column, check if it exists. If not, create a default column.
     for col in categorical_columns:
         if col not in df_filtered.columns:
             print(f"Column {col} not found; creating default values.")
@@ -379,10 +374,10 @@ def train_pipeline():
     labels_mortality = torch.tensor(df_filtered["short_term_mortality"].values, dtype=torch.float32)
     labels_readmission = torch.tensor(df_filtered["readmission_within_30_days"].values, dtype=torch.float32)
 
-    # ----- Compute Class Weights using INS -----
+    # Compute Class Weights using INS 
     class_weights_mortality = compute_class_weights(df_filtered, 'short_term_mortality')
     class_weights_readmission = compute_class_weights(df_filtered, 'readmission_within_30_days')
-    # Convert class weights to tensors for PyTorch loss functions (on CPU)
+    # Convert class weights to tensors for PyTorch loss functions
     class_weights_tensor_mortality = torch.tensor(class_weights_mortality.values, dtype=torch.float).to('cpu')
     class_weights_tensor_readmission = torch.tensor(class_weights_readmission.values, dtype=torch.float).to('cpu')
 
@@ -440,7 +435,7 @@ def train_pipeline():
     criterion_mortality = FocalLoss(gamma=2, pos_weight=mortality_pos_weight, reduction='mean')
     criterion_readmission = FocalLoss(gamma=2, pos_weight=readmission_pos_weight, reduction='mean')
 
-    # ----- Training Loop -----
+    # Training Loop 
     num_epochs = 5
     for epoch in range(num_epochs):
         multimodal_model.train()
