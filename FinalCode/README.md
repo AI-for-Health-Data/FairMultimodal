@@ -37,7 +37,7 @@ This repository contains code and notebooks to preprocess structured and unstruc
 - **File:** `FinalCode/biobert.py`  
 - **Details:**  
   - This script processes the unstructured dataset using the BioClinicalBERT model to predict the same outcomes (short-term mortality and readmission).  
-  - The output of this process is saved in the file `biobert.log`.
+  - The output of this process is saved in the file `unstruct.log`.
 
 ---
 
