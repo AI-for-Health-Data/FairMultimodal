@@ -72,7 +72,7 @@ class BioClinicalBERT_FT(nn.Module):
         cls_embedding = outputs.last_hidden_state[:, 0, :]  # CLS token
         return cls_embedding
 
-# Function to Process and Aggregate Patient Notes
+# --- Function to Process and Aggregate Patient Notes ---
 def apply_bioclinicalbert_on_patient_notes(df, note_columns, tokenizer, model, device, aggregation="mean"):
     """
     For each unique patient (by subject_id), extracts all non-null notes from the given note columns,
@@ -105,7 +105,7 @@ def apply_bioclinicalbert_on_patient_notes(df, note_columns, tokenizer, model, d
                 input_ids = encoded['input_ids'].to(device)
                 attn_mask = encoded['attention_mask'].to(device)
                 with torch.no_grad():
-                    emb = model(input_ids, attn_mask) 
+                    emb = model(input_ids, attn_mask)  # (1, hidden_size)
                 embeddings.append(emb.cpu().numpy())
             embeddings = np.vstack(embeddings)
             if aggregation == "mean":
@@ -121,6 +121,7 @@ class BEHRTModel(nn.Module):
     def __init__(self, num_diseases, num_ages, num_segments, num_admission_locs, num_discharge_locs, 
                  num_genders, num_ethnicities, num_insurances, hidden_size=768):
         super(BEHRTModel, self).__init__()
+        # Here, we construct a vocabulary size for the underlying BERT (this example adds extra tokens)
         vocab_size = num_diseases + num_ages + num_segments + num_admission_locs + num_discharge_locs + 2
         config = BertConfig(
             vocab_size=vocab_size,
@@ -134,6 +135,7 @@ class BEHRTModel(nn.Module):
             attention_probs_dropout_prob=0.1
         )
         self.bert = BertModel(config)
+        # Extra embeddings for structured variables
         self.age_embedding = nn.Embedding(num_ages, hidden_size)
         self.segment_embedding = nn.Embedding(num_segments, hidden_size)
         self.admission_loc_embedding = nn.Embedding(num_admission_locs, hidden_size)
@@ -163,8 +165,11 @@ class BEHRTModel(nn.Module):
         gender_embeds = self.gender_embedding(gender_ids)
         eth_embeds = self.ethnicity_embedding(ethnicity_ids)
         ins_embeds = self.insurance_embedding(insurance_ids)
+        # Compute an “extra” embedding by averaging these additional features
         extra = (age_embeds + segment_embeds + adm_embeds + disch_embeds + gender_embeds + eth_embeds + ins_embeds) / 7.0
+        # Combine the CLS token from BERT with the extra information.
         cls_token = sequence_output[:, 0, :]  # CLS token from BERT
+        # If extra is a 3D tensor (e.g. if using sequence input), take the first token's extra embedding.
         if extra.dim() == 3:
             cls_embedding = cls_token + extra[:, 0, :]
         else:
@@ -196,7 +201,7 @@ class MultimodalTransformer(nn.Module):
             nn.Linear(256 + 256, hidden_size),
             nn.ReLU(),
             nn.Dropout(0.1),
-            nn.Linear(hidden_size, 2)  
+            nn.Linear(hidden_size, 2)  # Two outputs: one for mortality and one for readmission
         )
 
     def forward(self, dummy_input_ids, dummy_attn_mask, 
@@ -208,6 +213,7 @@ class MultimodalTransformer(nn.Module):
                                     age_ids, segment_ids, adm_loc_ids, disch_loc_ids,
                                     gender_ids, ethnicity_ids, insurance_ids)
         ts_proj = self.ts_projector(structured_emb)
+        # aggregated_text_embedding is assumed to be the (precomputed) CLS embedding from BioClinicalBERT
         text_proj = self.text_projector(aggregated_text_embedding)
         # Concatenate both projected embeddings
         combined = torch.cat((ts_proj, text_proj), dim=1)
@@ -297,11 +303,13 @@ def evaluate_model(model, dataloader, device, threshold=0.5):
         metrics[task] = {"aucroc": aucroc, "auprc": auprc, "f1": f1, "recall": recall, "precision": precision}
     return metrics, all_mort_logits, all_readm_logits
 
+
+## Training Step Function
 def train_pipeline():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("Using device:", device)
 
-    # Merge Structured and Unstructured Data 
+    # ----- Merge Structured and Unstructured Data -----
     structured_data = pd.read_csv('filtered_structured_first_icu_stays.csv')
     unstructured_data = pd.read_csv("filtered_unstructured.csv", low_memory=False)
     print("\n--- Debug Info: Before Merge ---")
@@ -338,10 +346,11 @@ def train_pipeline():
                 return True
         return False
 
+    # Filter to rows that have at least one valid note.
     df_filtered = merged_df[merged_df.apply(has_valid_note, axis=1)].copy()
     print("After filtering, number of rows:", len(df_filtered))
 
-    # Compute Aggregated Text Embeddings
+    # ----- Compute Aggregated Text Embeddings -----
     print("Computing aggregated text embeddings for each patient...")
     tokenizer = AutoTokenizer.from_pretrained("emilyalsentzer/Bio_ClinicalBERT")
     bioclinical_bert_base = BertModel.from_pretrained("emilyalsentzer/Bio_ClinicalBERT")
@@ -353,8 +362,8 @@ def train_pipeline():
     print("Aggregated text embeddings shape:", aggregated_text_embeddings_np.shape)
     aggregated_text_embeddings_t = torch.tensor(aggregated_text_embeddings_np, dtype=torch.float32)
 
-    # Process Structured Data Columns 
-    # For categorical columns, ensure they exist and are numeric.
+    # ----- Process Structured Data Columns -----
+    # For categorical columns, ensure they exist and are numeric (if needed, convert using .cat.codes).
     categorical_columns = [
         "GENDER_struct",
         "ETHNICITY_struct",
@@ -378,7 +387,7 @@ def train_pipeline():
         df_filtered["segment"] = df_filtered["segment"].astype("category").cat.codes
 
     num_samples = len(df_filtered)
-    # Create dummy inputs for BEHRT’s underlying BERT.
+    # Create dummy inputs for BEHRT’s underlying BERT (which expects token ids and attention masks).
     dummy_input_ids = torch.zeros((num_samples, 1), dtype=torch.long)
     dummy_attn_mask = torch.ones((num_samples, 1), dtype=torch.long)
 
@@ -394,13 +403,13 @@ def train_pipeline():
     labels_mortality = torch.tensor(df_filtered["short_term_mortality"].values, dtype=torch.float32)
     labels_readmission = torch.tensor(df_filtered["readmission_within_30_days"].values, dtype=torch.float32)
 
-    # Compute Class Weights (INS) for Each Task
+    # ----- Compute Class Weights (INS) for Each Task -----
     class_weights_mortality = compute_class_weights(df_filtered, 'short_term_mortality')
     class_weights_readmission = compute_class_weights(df_filtered, 'readmission_within_30_days')
     class_weights_tensor_mortality = torch.tensor(class_weights_mortality.values, dtype=torch.float).to('cpu')
     class_weights_tensor_readmission = torch.tensor(class_weights_readmission.values, dtype=torch.float).to('cpu')
 
-    # Create Dataset and DataLoader 
+    # ----- Create Dataset and DataLoader -----
     dataset = TensorDataset(
         dummy_input_ids, dummy_attn_mask,
         age_ids, segment_ids, admission_loc_ids, discharge_loc_ids,
@@ -410,7 +419,7 @@ def train_pipeline():
     )
     dataloader = DataLoader(dataset, batch_size=8, shuffle=True)
 
-    # Hyperparameters Based on Processed Data 
+    # ----- Hyperparameters Based on Processed Data -----
     # Here we use the number of unique values in each column to set the embedding sizes.
     disease_mapping = {d: i for i, d in enumerate(df_filtered["hadm_id"].unique())}
     NUM_DISEASES = len(disease_mapping)
@@ -432,7 +441,7 @@ def train_pipeline():
     print("NUM_ETHNICITIES:", NUM_ETHNICITIES)
     print("NUM_INSURANCES:", NUM_INSURANCES)
 
-    # Initialize the BEHRT and Multimodal Models 
+    # ----- Initialize the BEHRT and Multimodal Models -----
     behrt_model = BEHRTModel(
         num_diseases=NUM_DISEASES,
         num_ages=NUM_AGES,
@@ -459,7 +468,7 @@ def train_pipeline():
     criterion_mortality = FocalLoss(gamma=2, pos_weight=mortality_pos_weight, reduction='mean')
     criterion_readmission = FocalLoss(gamma=2, pos_weight=readmission_pos_weight, reduction='mean')
 
-    # Training Loop 
+    # ----- Training Loop -----
     num_epochs = 5
     for epoch in range(num_epochs):
         multimodal_model.train()
