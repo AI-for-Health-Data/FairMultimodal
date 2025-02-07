@@ -46,7 +46,7 @@ This repository contains code and notebooks to preprocess structured and unstruc
 - **File:** `FinalCode/Multimodal.py`  
 - **Details:**  
   - This script combines both structured and unstructured datasets to create a multimodal prediction model.  
-  - The results from this run are stored in `Runresult.log`.
+  - The results from this run are stored in `multi.log`.
 
 ---
 
@@ -63,6 +63,6 @@ This repository contains code and notebooks to preprocess structured and unstruc
 
 3. **Multimodal Prediction:**
    - Execute `Multimodal.py` to run the multimodal prediction.  
-   - Check the output in `Runresult.log`.
+   - Check the output in `multi.log`.
 
 
