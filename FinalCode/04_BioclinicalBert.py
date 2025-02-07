@@ -187,7 +187,7 @@ def train_pipeline():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("Using device:", device)
 
-    df = pd.read_csv("final_unstructured.csv", low_memory=False)
+    df = pd.read_csv("filtered_unstructured.csv", low_memory=False)
     print("Data shape:", df.shape)
     
     note_columns = [col for col in df.columns if col.startswith("note_")]
