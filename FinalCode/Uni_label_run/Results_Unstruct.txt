@@ -1,0 +1,33 @@
+Re-admission : 
+Computing aggregated text embeddings for each patient...
+Aggregated text embeddings shape: (46091, 768)
+[Epoch 1/3] Train Loss: 0.4643
+[Epoch 1/3] Threshold: 0.2 Metrics: {'readmission': {'aucroc': 0.6995447831068272, 'auprc': 0.16769139144655726, 'f1': 0.16490330502404585, 'recall': 0.9967837704106878, 'precision': 0.08988688842781607}}
+[Epoch 1/3] Threshold: 0.3 Metrics: {'readmission': {'aucroc': 0.6995447831068272, 'auprc': 0.16769139144655726, 'f1': 0.17238889253594172, 'recall': 0.9745175655616032, 'precision': 0.09455793744148643}}
+[Epoch 1/3] Threshold: 0.4 Metrics: {'readmission': {'aucroc': 0.6995447831068272, 'auprc': 0.16769139144655726, 'f1': 0.20230775709593193, 'recall': 0.8913904007916873, 'precision': 0.11410203629223802}}
+[Epoch 1/3] Threshold: 0.5 Metrics: {'readmission': {'aucroc': 0.6995447831068272, 'auprc': 0.16769139144655726, 'f1': 0.25571725571725573, 'recall': 0.5173181593270658, 'precision': 0.16983430799220273}}
+[Epoch 2/3] Train Loss: 0.4529
+[Epoch 2/3] Threshold: 0.2 Metrics: {'readmission': {'aucroc': 0.7118883939378987, 'auprc': 0.18081664880906054, 'f1': 0.1641812300368238, 'recall': 0.9982681840672935, 'precision': 0.08944603311830818}}
+[Epoch 2/3] Threshold: 0.3 Metrics: {'readmission': {'aucroc': 0.7118883939378987, 'auprc': 0.18081664880906054, 'f1': 0.17036751807641295, 'recall': 0.9851558634339436, 'precision': 0.0932465342825028}}
+[Epoch 2/3] Threshold: 0.4 Metrics: {'readmission': {'aucroc': 0.7118883939378987, 'auprc': 0.18081664880906054, 'f1': 0.18775187282122283, 'recall': 0.9393864423552697, 'precision': 0.10429886004669688}}
+[Epoch 2/3] Threshold: 0.5 Metrics: {'readmission': {'aucroc': 0.7118883939378987, 'auprc': 0.18081664880906054, 'f1': 0.23455536755029138, 'recall': 0.7716476991588322, 'precision': 0.13829645723407086}}
+[Epoch 3/3] Train Loss: 0.4477
+[Epoch 3/3] Threshold: 0.2 Metrics: {'readmission': {'aucroc': 0.7174005477151847, 'auprc': 0.1880776116734244, 'f1': 0.16391645862509896, 'recall': 0.9990103908955963, 'precision': 0.08928295044995246}}
+[Epoch 3/3] Threshold: 0.3 Metrics: {'readmission': {'aucroc': 0.7174005477151847, 'auprc': 0.1880776116734244, 'f1': 0.1713546718396379, 'recall': 0.983424047501237, 'precision': 0.09385403631383846}}
+[Epoch 3/3] Threshold: 0.4 Metrics: {'readmission': {'aucroc': 0.7174005477151847, 'auprc': 0.1880776116734244, 'f1': 0.19515243029340554, 'recall': 0.9272637308263236, 'precision': 0.10905176176205301}}
+[Epoch 3/3] Threshold: 0.5 Metrics: {'readmission': {'aucroc': 0.7174005477151847, 'auprc': 0.1880776116734244, 'f1': 0.2463520778223398, 'recall': 0.7142503711034142, 'precision': 0.1488451227057125}}
+Training complete.
+##################################################################################################################
+Mortality:
+Aggregated text embeddings shape: (46091, 768)
+[Epoch 1] Train Loss: 0.3989
+Metrics at threshold=0.5 after epoch 1: {'aucroc': 0.9469224961352024, 'auprc': 0.7256341613759754, 'f1': 0.47859308671922385, 'recall': 0.928252175958598, 'precision': 0.3224119617615818}
+[Epoch 2] Train Loss: 0.3287
+Metrics at threshold=0.5 after epoch 2: {'aucroc': 0.9535491564688638, 'auprc': 0.7499799206606024, 'f1': 0.4532466804863018, 'recall': 0.951540813926135, 'precision': 0.2974702162082659}
+[Epoch 3] Train Loss: 0.3110
+Metrics at threshold=0.5 after epoch 3: {'aucroc': 0.9582834744091259, 'auprc': 0.7676505781935334, 'f1': 0.5352877307274702, 'recall': 0.9277816984239002, 'precision': 0.37615641392465426}
+[Epoch 4] Train Loss: 0.2971
+Metrics at threshold=0.5 after epoch 4: {'aucroc': 0.9622182307345972, 'auprc': 0.7851289705168459, 'f1': 0.4778356854248404, 'recall': 0.9597741707833451, 'precision': 0.3181038515515359}
+[Epoch 5] Train Loss: 0.2836
+Metrics at threshold=0.5 after epoch 5: {'aucroc': 0.9650606026565338, 'auprc': 0.7974308452521414, 'f1': 0.5368660511173557, 'recall': 0.9437779346036227, 'precision': 0.3751285647498831}
+Training complete.
