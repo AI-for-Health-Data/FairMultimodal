@@ -32,6 +32,7 @@ Metrics at threshold=0.5 after epoch 4: {'aucroc': 0.9622182307345972, 'auprc': 
 Metrics at threshold=0.5 after epoch 5: {'aucroc': 0.9650606026565338, 'auprc': 0.7974308452521414, 'f1': 0.5368660511173557, 'recall': 0.9437779346036227, 'precision': 0.3751285647498831}
 Training complete.
 ####################################################################################################################
+If Loss = Mortality + readmission
 agregated text embeddings shape: (46091, 768)
 
 [Epoch 1/3] Train Loss: 0.8339
