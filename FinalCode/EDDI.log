@@ -1,0 +1,27 @@
+Using device: cuda
+
+--- Debug Info: Before Merge ---
+Structured data shape: (33942, 173)
+Unstructured data shape: (33942, 1053)
+After filtering, number of rows: 33701
+Number of lab feature columns: 153
+
+--- Demographics Hyperparameters ---
+NUM_AGES: 75
+NUM_GENDERS: 2
+NUM_ETHNICITIES: 41
+NUM_INSURANCES: 5
+NUM_LAB_FEATURES (tokens): 153
+Positive weight: 9.105247497558594
+Positive weight: 10.0
+[Epoch 1] Train Loss: 1.1497
+Metrics at threshold=0.5 after epoch 1: {'mortality': {'aucroc': 0.8935380659798533, 'auprc': 0.5964486385063733, 'f1': 0.539113348888616, 'recall': 0.6581709145427287, 'precision': 0.45653078202995007}, 'readmission': {'aucroc': 0.9575541717184254, 'auprc': 0.5800911826091958, 'f1': 0.6069904490957122, 'recall': 0.9884182660489742, 'precision': 0.4379765395894428}}
+[Epoch 2] Train Loss: 0.8343
+Metrics at threshold=0.5 after epoch 2: {'mortality': {'aucroc': 0.8923988015871535, 'auprc': 0.6158008899148859, 'f1': 0.5189333982710337, 'recall': 0.6389805097451274, 'precision': 0.43685936859368596}, 'readmission': {'aucroc': 0.9618910619687402, 'auprc': 0.6337020835171828, 'f1': 0.6384615384615384, 'recall': 0.9063534083388485, 'precision': 0.49280316660669304}}
+[Epoch 3] Train Loss: 0.7754
+Metrics at threshold=0.5 after epoch 3: {'mortality': {'aucroc': 0.940024035601247, 'auprc': 0.7473794238149851, 'f1': 0.6481815836987361, 'recall': 0.7535232383808096, 'precision': 0.5686806969902692}, 'readmission': {'aucroc': 0.960980095141577, 'auprc': 0.6155817087036046, 'f1': 0.6045294413688979, 'recall': 0.9937127729980145, 'precision': 0.4343989584840156}}
+[Epoch 4] Train Loss: 0.7357
+Metrics at threshold=0.5 after epoch 4: {'mortality': {'aucroc': 0.9437930609877833, 'auprc': 0.7636268601671627, 'f1': 0.649197592778335, 'recall': 0.776311844077961, 'precision': 0.5578539107950873}, 'readmission': {'aucroc': 0.9634563512198397, 'auprc': 0.6435213781907922, 'f1': 0.6204571789739808, 'recall': 0.9745201853077432, 'precision': 0.45510740225622004}}
+[Epoch 5] Train Loss: 0.7298
+Metrics at threshold=0.5 after epoch 5: {'mortality': {'aucroc': 0.9461636006734826, 'auprc': 0.7710910345540339, 'f1': 0.6526783510244384, 'recall': 0.7928035982008995, 'precision': 0.5546465282148102}, 'readmission': {'aucroc': 0.964477023444381, 'auprc': 0.6606591122163318, 'f1': 0.6384508348794063, 'recall': 0.9109861019192588, 'precision': 0.49143163156015707}}
+Training complete.
