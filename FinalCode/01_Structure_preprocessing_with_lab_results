@@ -1,1 +1,168 @@
+import pandas as pd
+import numpy as np
 
+# 1. Load Filtered Structured Dataset
+structured_df = pd.read_csv('filtered_structured_first_icu_stays.csv')
+filtered_subjects = set(structured_df['subject_id'].unique()) 
+print(f" Filtered structured dataset shape: {structured_df.shape}")
+
+# 2. Load ICU Stays Data (for admission times)
+icu_stays = pd.read_csv('ICUSTAYS.csv.gz', compression='gzip', usecols=['SUBJECT_ID', 'HADM_ID', 'INTIME'])
+icu_stays.columns = icu_stays.columns.str.lower()
+icu_stays['intime'] = pd.to_datetime(icu_stays['intime'])
+icu_stays = icu_stays[icu_stays['subject_id'].isin(filtered_subjects)]  # Filter ICU stays
+print(f" ICU stays data shape: {icu_stays.shape}")
+
+# 3. Define Feature Set C
+feature_set_C_items = {
+    'chartevents': [220051, 220052, 618, 220210, 224641, 220292, 535, 224695, 506, 220339, 448, 224687, 224685, 220293, 444, 224697, 220074, 224688, 223834, 50815, 225664, 220059, 683, 224684, 220060, 226253, 224161, 642, 225185, 226758, 226757, 226756, 220050, 211, 220045, 223761, 223835, 226873, 226871, 8364, 8555, 8368, 53, 646, 1529, 50809, 50931, 51478, 224639, 763, 224639, 226707 ],  
+    'labevents': [51221, 51480, 51265, 50811, 51222, 51249, 51248, 51250, 51279, 51277, 50902, 50868, 50912, 50809, 50931, 51478, 50960, 50893, 50970, 51237, 51274, 51275, 51375, 51427, 51446, 51116, 51244, 51355, 51379, 51120, 51254, 51256, 51367, 51387, 51442, 51112, 51146, 51345, 51347, 51368, 51419, 51444, 51114, 51200, 51474, 50820, 50831, 51094, 51491, 50802, 50804, 50818, 51498, 50813, 50861, 50878, 50863, 50862, 490, 1165, 50902, 50819],  
+    'inputevents': [30008, 220864, 30005, 220970, 221385, 30023, 221456, 221668, 221749, 221794, 221828, 221906, 30027, 222011, 222056, 223258, 30126, 225154, 30297, 225166, 225168, 30144, 225799, 225823, 44367, 225828, 225943, 30065, 225944, 226089, 226364, 30056, 226452, 30059, 226453, 227522, 227523, 30044, 221289, 30051, 222315, 30043, 221662, 30124, 30118, 221744, 30131, 222168],  
+    'outputevents': [226573, 40054, 40085, 44890, 43703, 226580, 226588, 226589, 226599, 226626, 226633, 227510],  # Urine output
+    'prescriptions': ['Docusate Sodium', 'Aspirin', 'Bisacodyl', 'Humulin-R Insulin', 'Metoprolol', 'Pantoprazole Sodium', 'Pantoprazole']
+}
+
+# 4. Define Input Files
+input_files = {
+    'chartevents': 'CHARTEVENTS.csv.gz',
+    'labevents': 'LABEVENTS.csv.gz',
+    'inputevents': ['inputevents_cv.csv.gz', 'inputevents_mv.csv.gz'],
+    'outputevents': 'OUTPUTEVENTS.csv.gz',
+    'prescriptions': 'PRESCRIPTIONS.csv.gz'
+}
+
+# 5. Function to Load and Aggregate Data in 6-hour Bins
+def load_and_aggregate_feature_data(file_paths, table_name):
+    """ Load table(s), filter features, and resample data every 6 hours """
+
+    print(f"\n Processing {table_name} from {file_paths}...")
+
+    if isinstance(file_paths, list):
+        df_list = []
+        for f in file_paths:
+            df_chunk = pd.read_csv(f, compression='gzip', low_memory=False)
+            df_list.append(df_chunk)
+        df = pd.concat(df_list, ignore_index=True)
+    else:
+        df = pd.read_csv(file_paths, compression='gzip', low_memory=False)
+
+    df.columns = df.columns.str.lower()  # Standardize column names
+
+    # Ensure 'subject_id' exists
+    if 'subject_id' not in df.columns:
+        print(f" {table_name} is missing 'subject_id'. Skipping...")
+        return None
+
+    df = df[df['subject_id'].isin(filtered_subjects)]  # Filter by relevant patients
+    print(f" {table_name}: After filtering by subject_id - Shape: {df.shape}")
+
+    # Fix for Timestamp Column Detection
+    possible_time_cols = ['charttime', 'starttime', 'storetime', 'eventtime', 'endtime']
+    timestamp_col = next((col for col in possible_time_cols if col in df.columns), None)
+
+    if not timestamp_col:
+        print(f" {table_name} has no valid timestamp column. Skipping...")
+        return None
+
+    # Convert timestamp column to datetime
+    df[timestamp_col] = pd.to_datetime(df[timestamp_col], errors='coerce')
+    df.dropna(subset=[timestamp_col], inplace=True)  # Drop missing timestamps
+
+    # Merge with ICU stays to get admission times
+    df = df.merge(icu_stays, on=['subject_id', 'hadm_id'], how='inner')
+
+    # Compute hours since admission
+    df['hours_since_admission'] = (df[timestamp_col] - df['intime']).dt.total_seconds() / 3600
+    df = df[df['hours_since_admission'].between(0, 24)]  # Keep only first 24h
+
+    # Filter by feature itemids
+    if table_name != 'prescriptions' and 'itemid' in df.columns:
+        df = df[df['itemid'].isin(feature_set_C_items.get(table_name, []))]
+
+    print(f" {table_name}: After filtering features - Shape: {df.shape}")
+
+    # Identify numeric column for aggregation
+    numeric_col = next((col for col in ['value', 'amount', 'valuenum'] if col in df.columns), None)
+    if not numeric_col:
+        print(f" {table_name} has no numeric column. Skipping...")
+        return None
+
+    # Convert numeric column to float
+    df[numeric_col] = pd.to_numeric(df[numeric_col], errors='coerce')
+
+    # Group into 6-hour bins and aggregate
+    df['hour_bin'] = (df['hours_since_admission'] // 6).astype(int)
+    agg_func = 'sum' if table_name in ['inputevents', 'outputevents'] else 'mean'
+    aggregated_df = df.groupby(['subject_id', 'hadm_id', 'hour_bin', 'itemid'])[numeric_col].agg(agg_func).unstack().reset_index()
+
+    # Fix: Drop hour_bin before merging to prevent conflicts
+    if 'hour_bin' in aggregated_df.columns:
+        aggregated_df.drop(columns=['hour_bin'], inplace=True)
+
+    # Flatten column names to have "feature_timebin"
+    aggregated_df.columns = ['subject_id', 'hadm_id'] + [
+        f"{table_name}_t{int(col)}" for col in aggregated_df.columns[2:]
+    ]
+
+    print(f" {table_name}: Final shape {aggregated_df.shape}")
+
+    return aggregated_df
+
+# 6. Process and Extract Each Table
+aggregated_features = {}
+for table, file in input_files.items():
+    aggregated_features[table] = load_and_aggregate_feature_data(file, table)
+
+# 7. Merge and Ensure One Row Per Patient
+merged_features = structured_df.copy()
+
+for table_name, feature_df in aggregated_features.items():
+    if feature_df is not None:
+        merged_features = merged_features.merge(feature_df, on=['subject_id', 'hadm_id'], how='left')
+
+# Fix: Separate Numeric and Categorical Columns Before Aggregation
+numeric_cols = merged_features.select_dtypes(include=[np.number]).columns
+categorical_cols = merged_features.select_dtypes(exclude=[np.number]).columns
+
+# Keep numeric features by averaging, categorical features by first occurrence
+merged_features_numeric = merged_features.groupby('subject_id', as_index=False)[numeric_cols].mean()
+merged_features_categorical = merged_features.groupby('subject_id', as_index=False)[categorical_cols].first()
+
+# Merge back categorical data
+merged_features = merged_features_numeric.merge(merged_features_categorical, on='subject_id', how='left')
+
+# 8. Save Final Dataset
+output_file = 'final_structured_with_feature_set_C_24h_6h_bins.csv'
+merged_features.to_csv(output_file, index=False)
+print(f"\n Final dataset saved as {output_file}")
+
+# 9. Summary & Statistics
+print(f"\n Final Dataset Shape: {merged_features.shape}")
+print(f" Short-Term Mortality Count: {merged_features['short_term_mortality'].sum()}")
+print(f" Readmission Count: {merged_features['readmission_within_30_days'].sum()}")
+
+# Load structured dataset
+structured_df = pd.read_csv('final_structured_with_feature_set_C_24h_6h_bins.csv', low_memory=False)
+print(f"Structured dataset shape: {structured_df.shape}")
+
+# Count positive short-term mortality cases
+mortality_count = structured_df['short_term_mortality'].sum()
+readmission_count = structured_df['readmission_within_30_days'].sum()
+print(f"Short-term mortality count: {mortality_count}")
+print(f"Readmission count: {readmission_count}")
+
+# Load unstructured dataset
+unstructured_df = pd.read_csv('filtered_unstructured.csv', low_memory=False)
+print(f"Unstructured dataset shape: {unstructured_df.shape}")
+
+# Find common subjects
+common_subjects = set(structured_df['subject_id']).intersection(set(unstructured_df['subject_id']))
+print(f"Number of common subject IDs: {len(common_subjects)}")
+
+# Filter datasets to keep only common subjects
+filtered_structured = structured_df[structured_df['subject_id'].isin(common_subjects)]
+
+# Save the filtered datasets
+filtered_structured.to_csv('filtered_structured_output.csv', index=False)
+
+print("Filtered datasets saved.")
