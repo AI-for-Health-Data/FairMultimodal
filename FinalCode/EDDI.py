@@ -21,7 +21,6 @@ DEBUG = True
 
 
 # 1. Loss Functions and Class Weight Computation
-
 class FocalLoss(nn.Module):
     def __init__(self, gamma=2, alpha=None, reduction='mean', pos_weight=None):
         super(FocalLoss, self).__init__()
@@ -67,7 +66,6 @@ def get_pos_weight(labels_series, device, clip_max=10.0):
 
 
 # 2. BioClinicalBERT Fine-Tuning and Note Aggregation
-
 class BioClinicalBERT_FT(nn.Module):
     """
     A fine-tuning wrapper for BioClinicalBERT.
@@ -407,7 +405,7 @@ def train_pipeline():
     print("Using device:", device)
 
     # Merge Structured and Unstructured Data 
-    structured_data = pd.read_csv('filtered_structured_first_icu_stays_with_features.csv')
+    structured_data = pd.read_csv('filtered_structured_output.csv')
     unstructured_data = pd.read_csv("filtered_unstructured.csv", low_memory=False)
     print("\n--- Debug Info: Before Merge ---")
     print("Structured data shape:", structured_data.shape)
