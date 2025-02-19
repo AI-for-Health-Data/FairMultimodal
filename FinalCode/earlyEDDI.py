@@ -16,10 +16,11 @@ from torch.utils.data import TensorDataset, DataLoader
 from transformers import BertModel, BertConfig, AutoTokenizer
 from sklearn.metrics import roc_auc_score, average_precision_score, f1_score, recall_score, precision_score
 
+# Global debug flag; set to True to print debug info.
 DEBUG = True
 
-
 # 1. Loss Functions and Class Weight Computation
+
 class FocalLoss(nn.Module):
     def __init__(self, gamma=2, alpha=None, reduction='mean', pos_weight=None):
         super(FocalLoss, self).__init__()
@@ -62,9 +63,8 @@ def get_pos_weight(labels_series, device, clip_max=10.0):
         print("Positive weight:", weight.item())
     return weight
 
-
-
 # 2. BioClinicalBERT Fine-Tuning and Note Aggregation
+
 class BioClinicalBERT_FT(nn.Module):
     """
     A fine-tuning wrapper for BioClinicalBERT.
@@ -78,8 +78,6 @@ class BioClinicalBERT_FT(nn.Module):
     def forward(self, input_ids, attention_mask):
         outputs = self.BioBert(input_ids=input_ids, attention_mask=attention_mask)
         cls_embedding = outputs.last_hidden_state[:, 0, :]  # CLS token
-        #if DEBUG:
-        #    print("BioClinicalBERT CLS embedding shape:", cls_embedding.shape)
         return cls_embedding
 
 def apply_bioclinicalbert_on_patient_notes(df, note_columns, tokenizer, model, device, aggregation="mean"):
@@ -114,7 +112,7 @@ def apply_bioclinicalbert_on_patient_notes(df, note_columns, tokenizer, model, d
                 input_ids = encoded['input_ids'].to(device)
                 attn_mask = encoded['attention_mask'].to(device)
                 with torch.no_grad():
-                    emb = model(input_ids, attn_mask)  
+                    emb = model(input_ids, attn_mask)
                 embeddings.append(emb.cpu().numpy())
             embeddings = np.vstack(embeddings)
             agg_emb = np.mean(embeddings, axis=0) if aggregation == "mean" else np.max(embeddings, axis=0)
@@ -122,8 +120,8 @@ def apply_bioclinicalbert_on_patient_notes(df, note_columns, tokenizer, model, d
     aggregated_embeddings = np.vstack(aggregated_embeddings)
     return aggregated_embeddings
 
-
 # 3. BEHRT Models for Structured Data
+
 # 3a. Demographics Branch
 class BEHRTModel_Demo(nn.Module):
     def __init__(self, num_ages, num_genders, num_ethnicities, num_insurances, hidden_size=768):
@@ -180,51 +178,18 @@ class BEHRTModel_Lab(nn.Module):
         self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
 
     def forward(self, lab_features):
-        x = lab_features.unsqueeze(-1)  
-        x = self.token_embedding(x)    
+        x = lab_features.unsqueeze(-1)
+        x = self.token_embedding(x)
         x = x + self.pos_embedding.unsqueeze(0)
-        x = x.permute(1, 0, 2)  
+        x = x.permute(1, 0, 2)
         x = self.transformer_encoder(x)
-        x = x.permute(1, 0, 2)  
+        x = x.permute(1, 0, 2)
         lab_embedding = x.mean(dim=1)
-
         return lab_embedding
 
-
-# 4. EDDI Enhancement Layer
-class EDDIEnhancementLayer(nn.Module):
-    """
-    Applies a sigmoid to the input and multiplies element‑wise by a learnable weight vector.
-    Initialized to ones so the initial enhancement is near identity.
-    """
-    def __init__(self, input_dim):
-        super(EDDIEnhancementLayer, self).__init__()
-        self.sigmoid = nn.Sigmoid()
-        self.eddi_weight = nn.Parameter(torch.ones(input_dim))  
-
-    def forward(self, x):
-        x_sigmoid = self.sigmoid(x)
-        enhanced = x_sigmoid * self.eddi_weight
-        return enhanced
-
-
-# 5. Multimodal Transformer: Fusion of Branches
-
-# 5. Multimodal Transformer: Fusion of Branches
+# 4. Multimodal Transformer: Fusion of Branches
 class MultimodalTransformer(nn.Module):
     def __init__(self, text_embed_size, behrt_demo, behrt_lab, device, hidden_size=512):
-        """
-        Combines three branches:
-          - Demographics (via BEHRTModel_Demo)
-          - Lab features (via BEHRTModel_Lab)
-          - Text (aggregated BioClinicalBERT embedding)
-        Each branch is projected to 256 dimensions, passed through an EDDI enhancement layer.
-        Then, we compute a weight for each modality as:
-           weight = 0.333 + (maxEDDI - modality_EDDI)
-        where modality_EDDI is computed as the dot product between the projection and its EDDI enhancement.
-        The modality embedding is re‐weighted by multiplying by this computed weight, a new dot product is computed,
-        and the three scalars (one per branch) are concatenated and fed to a classifier.
-        """
         super(MultimodalTransformer, self).__init__()
         self.behrt_demo = behrt_demo
         self.behrt_lab = behrt_lab
@@ -242,83 +207,65 @@ class MultimodalTransformer(nn.Module):
             nn.Linear(text_embed_size, 256),
             nn.ReLU()
         )
-
-        self.eddi_demo = EDDIEnhancementLayer(256)
-        self.eddi_lab = EDDIEnhancementLayer(256)
-        self.eddi_text = EDDIEnhancementLayer(256)
-
+        
+        # Define classifier as a submodule:
         self.classifier = nn.Sequential(
-            nn.Linear(3, hidden_size),
+            nn.Linear(3, 512),
             nn.ReLU(),
             nn.Dropout(0.1),
-            nn.Linear(hidden_size, 2)
+            nn.Linear(512, 2)
         )
-
+    
     def forward(self, demo_dummy_ids, demo_attn_mask,
                 age_ids, gender_ids, ethnicity_ids, insurance_ids,
                 lab_features, aggregated_text_embedding):
-        # Demographics branch
+        # Process each branch
         demo_embedding = self.behrt_demo(demo_dummy_ids, demo_attn_mask,
                                          age_ids, gender_ids, ethnicity_ids, insurance_ids)
-        # Lab branch
         lab_embedding = self.behrt_lab(lab_features)
-        # Text branch
         text_embedding = aggregated_text_embedding
 
-        # Projection
+        # Project embeddings
         demo_proj = self.demo_projector(demo_embedding)
         lab_proj = self.lab_projector(lab_embedding)
         text_proj = self.text_projector(text_embedding)
 
-        # EDDI enhancement (original)
-        demo_enhanced = self.eddi_demo(demo_proj)
-        lab_enhanced = self.eddi_lab(lab_proj)
-        text_enhanced = self.eddi_text(text_proj)
+        # Compute original dot products (sum along feature dimension)
+        demo_dot = torch.sum(demo_proj, dim=1, keepdim=True)
+        lab_dot = torch.sum(lab_proj, dim=1, keepdim=True)
+        text_dot = torch.sum(text_proj, dim=1, keepdim=True)
 
-        # Compute original dot products (EDDI scores) per modality
-        demo_dot = torch.sum(demo_proj * demo_enhanced, dim=1, keepdim=True)
-        lab_dot = torch.sum(lab_proj * lab_enhanced, dim=1, keepdim=True)
-        text_dot = torch.sum(text_proj * text_enhanced, dim=1, keepdim=True)
-
-        # Compute maxEDDI per sample over the three modalities
+        # Compute the maximum dot product per sample
         stacked = torch.cat((demo_dot, lab_dot, text_dot), dim=1)
         maxEDDI, _ = torch.max(stacked, dim=1, keepdim=True)
 
-        # Compute new weights for each modality: weight = 0.333 + (maxEDDI - modality_EDDI)
+        # Compute weights for each modality (for analysis, not used in loss)
         weight_demo = 0.333 + (maxEDDI - demo_dot)
         weight_lab = 0.333 + (maxEDDI - lab_dot)
         weight_text = 0.333 + (maxEDDI - text_dot)
 
-        # Re-weight the projected embeddings with the computed weights
-        weighted_demo = demo_proj * weight_demo
-        weighted_lab = lab_proj * weight_lab
-        weighted_text = text_proj * weight_text
+        # Compute new dot products (for classifier fusion)
+        new_demo_dot = torch.sum(demo_proj * weight_demo, dim=1, keepdim=True)
+        new_lab_dot = torch.sum(lab_proj * weight_lab, dim=1, keepdim=True)
+        new_text_dot = torch.sum(text_proj * weight_text, dim=1, keepdim=True)
 
-        # Recompute dot products from the weighted embeddings
-        new_demo_dot = torch.sum(weighted_demo, dim=1, keepdim=True)
-        new_lab_dot = torch.sum(weighted_lab, dim=1, keepdim=True)
-        new_text_dot = torch.sum(weighted_text, dim=1, keepdim=True)
-        
-        # Concatenate the three new dot products and classify
         concatenated = torch.cat((new_demo_dot, new_lab_dot, new_text_dot), dim=1)
         logits = self.classifier(concatenated)
+
         mortality_logits = logits[:, 0].unsqueeze(1)
         readmission_logits = logits[:, 1].unsqueeze(1)
-        
-        # Return extra values for later analysis (e.g. demo_dot and demographic info)
+
         return (mortality_logits, readmission_logits,
                 weight_demo, weight_lab, weight_text,
                 demo_dot, lab_dot, text_dot)
 
+# 5. Training and Evaluation Functions
 
-# 6. Training and Evaluation Functions
-def train_step(model, dataloader, optimizer, device, criterion_mortality, criterion_readmission, beta=0.3):
+def train_step(model, dataloader, optimizer, device, criterion_mortality, criterion_readmission, beta=0.3, target=1.0):
     """
-    Training step with loss = L_ce + beta * EDDI.
+    Training step with loss = L_ce + beta * EDDI_loss.
     L_ce is the sum of the focal losses for mortality and readmission.
-    EDDI is computed as the average of the original dot products (one per modality).
-    
-    beta: Hyperparameter to control the contribution of the EDDI term.
+    EDDI_loss is computed as the average squared error between each original dot product and a target value.
     """
     model.train()
     running_loss = 0.0
@@ -328,32 +275,49 @@ def train_step(model, dataloader, optimizer, device, criterion_mortality, criter
          lab_features,
          aggregated_text_embedding,
          labels_mortality, labels_readmission) = [x.to(device) for x in batch]
-        
+
         optimizer.zero_grad()
-        
-        # Forward pass: we expect the model to return extra outputs including the original dot products.
+
         mortality_logits, readmission_logits, weight_demo, weight_lab, weight_text, demo_dot, lab_dot, text_dot = model(
             demo_dummy_ids, demo_attn_mask,
             age_ids, gender_ids, ethnicity_ids, insurance_ids,
             lab_features, aggregated_text_embedding
         )
-        
-        # Compute the standard classification loss (L_ce)
+
         loss_mortality = criterion_mortality(mortality_logits, labels_mortality.unsqueeze(1))
         loss_readmission = criterion_readmission(readmission_logits, labels_readmission.unsqueeze(1))
         ce_loss = loss_mortality + loss_readmission
-        
-        # Compute EDDI as the average of the original dot products
-        eddi_value = (demo_dot.mean() + lab_dot.mean() + text_dot.mean()) / 3.0
-        
-        # Total loss = classification loss + beta * EDDI
-        loss = ce_loss + beta * eddi_value
-        
+
+        # Force each dot product to approach the target (e.g. 1.0) and aggregate over batch
+        eddi_loss = beta * ((((demo_dot - target) ** 2 + (lab_dot - target) ** 2 + (text_dot - target) ** 2) / 3.0).mean())
+
+        loss = ce_loss + eddi_loss
+
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
         running_loss += loss.item()
     return running_loss
+
+def get_age_bucket(age):
+    if 15 <= age <= 29:
+        return "15-29"
+    elif 30 <= age <= 49:
+        return "30-49"
+    elif 50 <= age <= 69:
+        return "50-69"
+    elif 70 <= age <= 89:
+        return "70-89"
+    else:
+        return "other"
+
+def map_ethnicity(code):
+    mapping = {0: "white", 1: "black", 2: "asian", 3: "hispanic"}
+    return mapping.get(code, "others")
+
+def map_insurance(code):
+    mapping = {0: "Medicare", 1: "Medicaid", 2: "Private", 3: "Self-pay", 4: "Other"}
+    return mapping.get(code, "other")
 
 def evaluate_model(model, dataloader, device, threshold=0.5, df_filtered=None):
     model.eval()
@@ -361,13 +325,11 @@ def evaluate_model(model, dataloader, device, threshold=0.5, df_filtered=None):
     all_readm_logits = []
     all_labels_mort = []
     all_labels_readm = []
-    
-    # For EDDI analysis from demo branch:
     all_demo_eddi = []
     all_age = []
     all_ethnicity = []
     all_insurance = []
-    
+
     with torch.no_grad():
         for batch in dataloader:
             (demo_dummy_ids, demo_attn_mask,
@@ -375,10 +337,7 @@ def evaluate_model(model, dataloader, device, threshold=0.5, df_filtered=None):
              lab_features,
              aggregated_text_embedding,
              labels_mortality, labels_readmission) = [x.to(device) for x in batch]
-            # Unpack extra outputs including demo_dot
-            (mort_logits, readm_logits,
-             weight_demo, weight_lab, weight_text,
-             demo_dot, lab_dot, text_dot) = model(
+            mort_logits, readm_logits, weight_demo, weight_lab, weight_text, demo_dot, lab_dot, text_dot = model(
                 demo_dummy_ids, demo_attn_mask,
                 age_ids, gender_ids, ethnicity_ids, insurance_ids,
                 lab_features, aggregated_text_embedding
@@ -387,24 +346,22 @@ def evaluate_model(model, dataloader, device, threshold=0.5, df_filtered=None):
             all_readm_logits.append(readm_logits.cpu())
             all_labels_mort.append(labels_mortality.cpu())
             all_labels_readm.append(labels_readmission.cpu())
-            
-            # Collect demo EDDI (demo_dot) and corresponding demographic info
+
             all_demo_eddi.append(demo_dot.cpu())
             all_age.append(age_ids.cpu())
             all_ethnicity.append(ethnicity_ids.cpu())
             all_insurance.append(insurance_ids.cpu())
-            
-    # Concatenate outputs across batches
+
     all_mort_logits = torch.cat(all_mort_logits, dim=0)
     all_readm_logits = torch.cat(all_readm_logits, dim=0)
     all_labels_mort = torch.cat(all_labels_mort, dim=0)
     all_labels_readm = torch.cat(all_labels_readm, dim=0)
-    
+
     mort_probs = torch.sigmoid(all_mort_logits).numpy().squeeze()
     readm_probs = torch.sigmoid(all_readm_logits).numpy().squeeze()
     labels_mort_np = all_labels_mort.numpy().squeeze()
     labels_readm_np = all_labels_readm.numpy().squeeze()
-    
+
     metrics = {}
     for task, probs, labels in zip(["mortality", "readmission"],
                                    [mort_probs, readm_probs],
@@ -422,36 +379,53 @@ def evaluate_model(model, dataloader, device, threshold=0.5, df_filtered=None):
         recall = recall_score(labels, preds, zero_division=0)
         precision = precision_score(labels, preds, zero_division=0)
         metrics[task] = {"aucroc": aucroc, "auprc": auprc, "f1": f1, "recall": recall, "precision": precision}
-    
+
     if df_filtered is not None:
         baseline_auprc_mortality = df_filtered["short_term_mortality"].mean()
         baseline_auprc_readmission = df_filtered["readmission_within_30_days"].mean()
         metrics["baseline_auprc"] = {"mortality": baseline_auprc_mortality, "readmission": baseline_auprc_readmission}
-    
-    # Compute and print EDDI stats for demo branch
-    # Concatenate demographic info and demo EDDI scores
-    demo_eddi_all = torch.cat(all_demo_eddi, dim=0).squeeze().numpy()  # shape (num_samples,)
+
+    demo_eddi_all = torch.cat(all_demo_eddi, dim=0).squeeze().numpy()
     age_all = torch.cat(all_age, dim=0).numpy().squeeze()
     ethnicity_all = torch.cat(all_ethnicity, dim=0).numpy().squeeze()
     insurance_all = torch.cat(all_insurance, dim=0).numpy().squeeze()
-    
-    demo_stats = {}
-    for feature_name, feature_vals in zip(["age", "ethnicity", "insurance"],
-                                            [age_all, ethnicity_all, insurance_all]):
-        df_demo = pd.DataFrame({feature_name: feature_vals, "eddi_demo": demo_eddi_all})
-        group_means = df_demo.groupby(feature_name)["eddi_demo"].mean().to_dict()
-        overall_mean = df_demo["eddi_demo"].mean()
-        demo_stats[feature_name] = {"group_means": group_means, "overall_mean": overall_mean}
-        print(f"EDDI stats for {feature_name}:")
-        print("Group means:", group_means)
-        print("Overall mean:", overall_mean)
-    
-    # Add EDDI stats to the returned metrics if desired
-    metrics["eddi_demo_stats"] = demo_stats
+
+    df_age = pd.DataFrame({"age": age_all, "eddi_demo": demo_eddi_all})
+    df_age["age_bucket"] = df_age["age"].apply(get_age_bucket)
+    age_group_means = df_age.groupby("age_bucket")["eddi_demo"].mean().to_dict()
+    overall_age_mean = np.mean(list(age_group_means.values()))
+
+    df_ethnicity = pd.DataFrame({"ethnicity": ethnicity_all, "eddi_demo": demo_eddi_all})
+    df_ethnicity["ethnicity_group"] = df_ethnicity["ethnicity"].apply(map_ethnicity)
+    ethnicity_group_means = df_ethnicity.groupby("ethnicity_group")["eddi_demo"].mean().to_dict()
+    overall_ethnicity_mean = np.mean(list(ethnicity_group_means.values()))
+
+    df_insurance = pd.DataFrame({"insurance": insurance_all, "eddi_demo": demo_eddi_all})
+    df_insurance["insurance_group"] = df_insurance["insurance"].apply(map_insurance)
+    insurance_group_means = df_insurance.groupby("insurance_group")["eddi_demo"].mean().to_dict()
+    overall_insurance_mean = np.mean(list(insurance_group_means.values()))
+
+    print("EDDI stats by Age Buckets:")
+    print("Group means:", age_group_means)
+    print("Overall Age Mean (avg of group means):", overall_age_mean)
+
+    print("EDDI stats by Ethnicity Groups:")
+    print("Group means:", ethnicity_group_means)
+    print("Overall Ethnicity Mean (avg of group means):", overall_ethnicity_mean)
+
+    print("EDDI stats by Insurance Groups:")
+    print("Group means:", insurance_group_means)
+    print("Overall Insurance Mean (avg of group means):", overall_insurance_mean)
+
+    metrics["eddi_demo_stats_grouped"] = {
+        "age": {"group_means": age_group_means, "overall_mean": overall_age_mean},
+        "ethnicity": {"group_means": ethnicity_group_means, "overall_mean": overall_ethnicity_mean},
+        "insurance": {"group_means": insurance_group_means, "overall_mean": overall_insurance_mean}
+    }
 
     return metrics, all_mort_logits, all_readm_logits
 
-# 7. Main Training Pipeline
+# 6. Main Training Pipeline
 
 def train_pipeline():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -463,7 +437,7 @@ def train_pipeline():
     print("\n--- Debug Info: Before Merge ---")
     print("Structured data shape:", structured_data.shape)
     print("Unstructured data shape:", unstructured_data.shape)
-    
+
     unstructured_data.drop(
         columns=["short_term_mortality", "readmission_within_30_days", "age",
                  "GENDER", "ETHNICITY", "INSURANCE"],
@@ -479,10 +453,10 @@ def train_pipeline():
     )
     if merged_df.empty:
         raise ValueError("Merged DataFrame is empty. Check your merge keys.")
-    
+
     merged_df["short_term_mortality"] = merged_df["short_term_mortality"].astype(int)
     merged_df["readmission_within_30_days"] = merged_df["readmission_within_30_days"].astype(int)
-    
+
     note_columns = [col for col in merged_df.columns if col.startswith("note_")]
     def has_valid_note(row):
         for col in note_columns:
@@ -492,7 +466,7 @@ def train_pipeline():
     df_filtered = merged_df[merged_df.apply(has_valid_note, axis=1)].copy()
     print("After filtering, number of rows:", len(df_filtered))
 
-    # Compute Aggregated Text Embeddings (Text Branch) 
+    # Compute Aggregated Text Embeddings (Text Branch)
     tokenizer = AutoTokenizer.from_pretrained("emilyalsentzer/Bio_ClinicalBERT")
     bioclinical_bert_base = BertModel.from_pretrained("emilyalsentzer/Bio_ClinicalBERT")
     bioclinical_bert_ft = BioClinicalBERT_FT(bioclinical_bert_base, bioclinical_bert_base.config, device).to(device)
@@ -526,7 +500,7 @@ def train_pipeline():
     lab_mean = np.mean(lab_features_np, axis=0)
     lab_std = np.std(lab_features_np, axis=0)
     lab_features_np = (lab_features_np - lab_mean) / (lab_std + 1e-6)
-    
+
     # Create Inputs for Each Branch
     num_samples = len(df_filtered)
     demo_dummy_ids = torch.zeros((num_samples, 1), dtype=torch.long)
@@ -589,8 +563,8 @@ def train_pipeline():
     criterion_mortality = FocalLoss(gamma=2, pos_weight=mortality_pos_weight, reduction='mean')
     criterion_readmission = FocalLoss(gamma=2, pos_weight=readmission_pos_weight, reduction='mean')
 
-    max_epochs = 50
-    patience_limit = 5  # Stop if no improvement for 5 epochs
+    max_epochs = 20
+    patience_limit = 5  
 
     beta_values = [0.3, 0.4, 0.5, 0.6, 0.7, 0.8]
     for beta_value in beta_values:
@@ -600,7 +574,8 @@ def train_pipeline():
 
         for epoch in range(max_epochs):
             running_loss = train_step(multimodal_model, dataloader, optimizer, device,
-                                      criterion_mortality, criterion_readmission, beta=beta_value)
+                                      criterion_mortality, criterion_readmission,
+                                      beta=beta_value, target=1.0)
             epoch_loss = running_loss / len(dataloader)
             print(f"[Beta {beta_value} | Epoch {epoch+1}] Train Loss: {epoch_loss:.4f}")
 
@@ -608,7 +583,6 @@ def train_pipeline():
             metrics, _, _ = evaluate_model(multimodal_model, dataloader, device, threshold=0.5)
             print(f"Metrics at threshold=0.5 after epoch {epoch+1}: {metrics}")
 
-            # Check for improvement; if no improvement for 'patience_limit' epochs, stop early.
             if epoch_loss < best_loss:
                 best_loss = epoch_loss
                 epochs_no_improve = 0
