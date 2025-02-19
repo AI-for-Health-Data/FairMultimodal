@@ -72,7 +72,7 @@ class BioClinicalBERT_FT(nn.Module):
         cls_embedding = outputs.last_hidden_state[:, 0, :]  # CLS token
         return cls_embedding
 
-# --- Function to Process and Aggregate Patient Notes ---
+# Function to Process and Aggregate Patient Notes 
 def apply_bioclinicalbert_on_patient_notes(df, note_columns, tokenizer, model, device, aggregation="mean"):
     """
     For each unique patient (by subject_id), extracts all non-null notes from the given note columns,
@@ -116,7 +116,7 @@ def apply_bioclinicalbert_on_patient_notes(df, note_columns, tokenizer, model, d
     aggregated_embeddings = np.vstack(aggregated_embeddings)
     return aggregated_embeddings
 
-# --- BEHRT Model for Structured Data ---
+# BEHRT Model for Structured Data 
 class BEHRTModel(nn.Module):
     def __init__(self, num_diseases, num_ages, num_segments, num_admission_locs, num_discharge_locs, 
                  num_genders, num_ethnicities, num_insurances, hidden_size=768):
@@ -174,9 +174,9 @@ class BEHRTModel(nn.Module):
             cls_embedding = cls_token + extra[:, 0, :]
         else:
             cls_embedding = cls_token + extra
-        return cls_embedding  # (batch, hidden_size)
+        return cls_embedding 
 
-# --- Multimodal Transformer Model ---
+# Multimodal Transformer Model
 # This model takes the CLS embedding from the BEHRT branch (structured data) and the aggregated
 # CLS embedding from the BioClinicalBERT branch (unstructured patient notes), projects them to a common
 # space, concatenates them, and then predicts the outcomes.
@@ -309,8 +309,8 @@ def train_pipeline():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("Using device:", device)
 
-    # ----- Merge Structured and Unstructured Data -----
-    structured_data = pd.read_csv('filtered_structured_first_icu_stays.csv')
+    # Merge Structured and Unstructured Data 
+    structured_data = pd.read_csv('filtered_structured_output.csv')
     unstructured_data = pd.read_csv("filtered_unstructured.csv", low_memory=False)
     print("\n--- Debug Info: Before Merge ---")
     print("Structured data shape:", structured_data.shape)
@@ -350,7 +350,7 @@ def train_pipeline():
     df_filtered = merged_df[merged_df.apply(has_valid_note, axis=1)].copy()
     print("After filtering, number of rows:", len(df_filtered))
 
-    # ----- Compute Aggregated Text Embeddings -----
+    # Compute Aggregated Text Embeddings 
     print("Computing aggregated text embeddings for each patient...")
     tokenizer = AutoTokenizer.from_pretrained("emilyalsentzer/Bio_ClinicalBERT")
     bioclinical_bert_base = BertModel.from_pretrained("emilyalsentzer/Bio_ClinicalBERT")
@@ -362,7 +362,7 @@ def train_pipeline():
     print("Aggregated text embeddings shape:", aggregated_text_embeddings_np.shape)
     aggregated_text_embeddings_t = torch.tensor(aggregated_text_embeddings_np, dtype=torch.float32)
 
-    # ----- Process Structured Data Columns -----
+    # Process Structured Data Columns
     # For categorical columns, ensure they exist and are numeric (if needed, convert using .cat.codes).
     categorical_columns = [
         "GENDER_struct",
@@ -403,13 +403,13 @@ def train_pipeline():
     labels_mortality = torch.tensor(df_filtered["short_term_mortality"].values, dtype=torch.float32)
     labels_readmission = torch.tensor(df_filtered["readmission_within_30_days"].values, dtype=torch.float32)
 
-    # ----- Compute Class Weights (INS) for Each Task -----
+    # Compute Class Weights (INS) for Each Task 
     class_weights_mortality = compute_class_weights(df_filtered, 'short_term_mortality')
     class_weights_readmission = compute_class_weights(df_filtered, 'readmission_within_30_days')
     class_weights_tensor_mortality = torch.tensor(class_weights_mortality.values, dtype=torch.float).to('cpu')
     class_weights_tensor_readmission = torch.tensor(class_weights_readmission.values, dtype=torch.float).to('cpu')
 
-    # ----- Create Dataset and DataLoader -----
+    # Create Dataset and DataLoader
     dataset = TensorDataset(
         dummy_input_ids, dummy_attn_mask,
         age_ids, segment_ids, admission_loc_ids, discharge_loc_ids,
@@ -419,7 +419,7 @@ def train_pipeline():
     )
     dataloader = DataLoader(dataset, batch_size=8, shuffle=True)
 
-    # ----- Hyperparameters Based on Processed Data -----
+    # Hyperparameters Based on Processed Data 
     # Here we use the number of unique values in each column to set the embedding sizes.
     disease_mapping = {d: i for i, d in enumerate(df_filtered["hadm_id"].unique())}
     NUM_DISEASES = len(disease_mapping)
@@ -441,7 +441,7 @@ def train_pipeline():
     print("NUM_ETHNICITIES:", NUM_ETHNICITIES)
     print("NUM_INSURANCES:", NUM_INSURANCES)
 
-    # ----- Initialize the BEHRT and Multimodal Models -----
+    # Initialize the BEHRT and Multimodal Models 
     behrt_model = BEHRTModel(
         num_diseases=NUM_DISEASES,
         num_ages=NUM_AGES,
@@ -455,7 +455,7 @@ def train_pipeline():
     ).to(device)
 
     multimodal_model = MultimodalTransformer(
-        text_embed_size=768,  # BioClinicalBERT outputs 768-dim embeddings
+        text_embed_size=768,  
         BEHRT=behrt_model,
         device=device,
         hidden_size=512
@@ -468,7 +468,7 @@ def train_pipeline():
     criterion_mortality = FocalLoss(gamma=2, pos_weight=mortality_pos_weight, reduction='mean')
     criterion_readmission = FocalLoss(gamma=2, pos_weight=readmission_pos_weight, reduction='mean')
 
-    # ----- Training Loop -----
+    # Training Loop 
     num_epochs = 5
     for epoch in range(num_epochs):
         multimodal_model.train()
