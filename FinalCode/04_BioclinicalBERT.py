@@ -16,9 +16,7 @@ from transformers import AutoTokenizer, AutoModel
 from sklearn.metrics import roc_auc_score, average_precision_score, f1_score, recall_score, precision_score
 from scipy.special import expit  # for logistic sigmoid
 
-# =======================
 # Focal Loss Definition
-# =======================
 class FocalLoss(nn.Module):
     def __init__(self, gamma=2, alpha=None, reduction='mean', pos_weight=None):
         super(FocalLoss, self).__init__()
@@ -44,9 +42,7 @@ class FocalLoss(nn.Module):
         else:
             return focal_loss
 
-# ============================================
 # Compute Class Weights (Inverse of Sample Count)
-# ============================================
 def compute_class_weights(df, label_column):
     class_counts = df[label_column].value_counts().sort_index()
     total_samples = len(df)
@@ -65,13 +61,11 @@ def get_pos_weight(labels_series, device, clip_max=10.0):
     print("Positive weight:", weight.item())
     return weight
 
-# ============================================
 # BioClinicalBERT Fine-Tuning Wrapper
-# ============================================
 class BioClinicalBERT_FT(nn.Module):
     def __init__(self, base_model, config, device):
         super(BioClinicalBERT_FT, self).__init__()
-        self.bert = base_model  # using attribute "bert" for consistency
+        self.bert = base_model  
         self.device = device
 
     def forward(self, input_ids, attention_mask, **kwargs):
@@ -80,9 +74,7 @@ class BioClinicalBERT_FT(nn.Module):
         cls_embedding = outputs.last_hidden_state[:, 0, :]
         return cls_embedding
 
-# ============================================
 # Apply BioClinicalBERT on Patient Notes
-# ============================================
 def apply_bioclinicalbert_on_patient_notes(df, note_columns, tokenizer, model, device, aggregation="mean", max_length=128):
     patient_ids = df["subject_id"].unique()
     aggregated_embeddings = []
@@ -118,9 +110,7 @@ def apply_bioclinicalbert_on_patient_notes(df, note_columns, tokenizer, model, d
     aggregated_embeddings = np.vstack(aggregated_embeddings)
     return aggregated_embeddings, patient_ids
 
-# ============================================
 # Unstructured Dataset Definition
-# ============================================
 class UnstructuredDataset(Dataset):
     def __init__(self, embeddings, mortality_labels, readmission_labels):
         """
@@ -137,9 +127,7 @@ class UnstructuredDataset(Dataset):
     def __getitem__(self, idx):
         return self.embeddings[idx], self.mortality_labels[idx], self.readmission_labels[idx]
 
-# ============================================
 # Unstructured Classifier Definition
-# ============================================
 class UnstructuredClassifier(nn.Module):
     def __init__(self, input_size=768, hidden_size=256):
         super(UnstructuredClassifier, self).__init__()
@@ -147,16 +135,14 @@ class UnstructuredClassifier(nn.Module):
             nn.Linear(input_size, hidden_size),
             nn.ReLU(),
             nn.Dropout(0.1),
-            nn.Linear(hidden_size, 2)  # Two outputs: index 0 for mortality, 1 for readmission
+            nn.Linear(hidden_size, 2)  
         )
 
     def forward(self, x):
         logits = self.classifier(x)
         return logits
 
-# ============================================
 # Training Function
-# ============================================
 def train_model(model, dataloader, optimizer, device, criterion_mort, criterion_readm):
     model.train()
     running_loss = 0.0
@@ -172,9 +158,7 @@ def train_model(model, dataloader, optimizer, device, criterion_mort, criterion_
         running_loss += loss.item()
     return running_loss / len(dataloader)
 
-# ============================================
 # Evaluation Function (for Classification Metrics)
-# ============================================
 def evaluate_model(model, dataloader, device, threshold=0.5):
     model.eval()
     all_logits = []
@@ -213,9 +197,7 @@ def evaluate_model(model, dataloader, device, threshold=0.5):
         metrics[task] = {"aucroc": aucroc, "auprc": auprc, "f1": f1, "recall": recall, "precision": precision}
     return metrics
 
-# ============================================
 # Inference: Get Predicted Probabilities
-# ============================================
 def get_patient_probabilities(model, dataloader, device):
     model.eval()
     all_logits = []
@@ -228,9 +210,7 @@ def get_patient_probabilities(model, dataloader, device):
     probs = 1 / (1 + np.exp(-all_logits))
     return probs
 
-# ============================================
-# Helper: Age Bucket Assignment
-# ============================================
+# Age Bucket 
 def assign_age_bucket(age):
     if 15 <= age <= 29:
         return '15-29'
@@ -243,9 +223,7 @@ def assign_age_bucket(age):
     else:
         return 'other'
 
-# ============================================
 # Fairness Metric: Compute EDDI for a Sensitive Attribute
-# ============================================
 def compute_eddi(df, sensitive_attr, true_label_col, pred_label_col):
     """
     Compute the Error Distribution Disparity Index (EDDI) for a given sensitive attribute.
@@ -265,14 +243,12 @@ def compute_eddi(df, sensitive_attr, true_label_col, pred_label_col):
     eddi = eddi_sum / num_groups if num_groups > 0 else 0.0
     return eddi
 
-# ============================================
 # Main Training and Evaluation Pipeline
-# ============================================
 def train_pipeline():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("Using device:", device)
 
-    # Read the CSV data. It should contain demographic columns as well as note columns.
+    # Read the CSV data. 
     df = pd.read_csv("filtered_unstructured.csv", low_memory=False)
     print("Data shape:", df.shape)
     
@@ -301,10 +277,9 @@ def train_pipeline():
     )
     print("Aggregated text embeddings shape:", aggregated_embeddings_np.shape)
     
-    # Use unique patients for labels and demographics (drop duplicates on subject_id)
+    # Use unique patients for labels and demographics 
     df_unique = df_filtered.drop_duplicates(subset="subject_id")
-    # It is assumed that df_unique contains sensitive demographic columns named:
-    # 'ethnicity_category', 'insurance_category', and 'age'
+    
     mortality_labels = df_unique["short_term_mortality"].values
     readmission_labels = df_unique["readmission_within_30_days"].values
 
@@ -335,14 +310,11 @@ def train_pipeline():
             print(f"[Epoch {epoch+1}/{num_epochs}] Threshold: {thresh} Metrics: {metrics}")
     print("Training complete.")
     
-    # -------------------------------
     # Inference and Fairness Evaluation for Both Tasks
-    # -------------------------------
     # Obtain predicted probabilities for all patients in the dataset
     probs = get_patient_probabilities(classifier, dataloader, device)
     
     # Build a results dataframe by merging predictions with demographics.
-    # It is assumed that df_unique has columns: 'subject_id', 'age', 'ethnicity_category', 'insurance_category'
     demo_cols = ['subject_id', 'age', 'ethnicity_category', 'insurance_category']
     df_demo = df_unique[demo_cols].copy()
     
@@ -373,9 +345,7 @@ def train_pipeline():
     # Create age buckets for fairness evaluation
     df_results['age_bucket'] = df_results['age'].apply(assign_age_bucket)
     
-    # -------------------------------
     # Fairness Evaluation: Mortality Outcome
-    # -------------------------------
     eddi_ethnicity_mort = compute_eddi(df_results, sensitive_attr='ethnicity_category',
                                        true_label_col='mortality_true', pred_label_col='mortality_pred')
     eddi_age_mort = compute_eddi(df_results, sensitive_attr='age_bucket',
@@ -390,9 +360,7 @@ def train_pipeline():
     print("EDDI for Insurance:", eddi_insurance_mort)
     print("Overall EDDI:", overall_eddi_mort)
     
-    # -------------------------------
     # Fairness Evaluation: Readmission Outcome
-    # -------------------------------
     eddi_ethnicity_readm = compute_eddi(df_results, sensitive_attr='ethnicity_category',
                                         true_label_col='readmission_true', pred_label_col='readmission_pred')
     eddi_age_readm = compute_eddi(df_results, sensitive_attr='age_bucket',
