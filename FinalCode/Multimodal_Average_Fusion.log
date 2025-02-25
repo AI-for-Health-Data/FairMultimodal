@@ -1,0 +1,44 @@
+Using device: cuda
+
+--- Debug Info: Before Merge ---
+Structured data shape: (33942, 173)
+Unstructured data shape: (33942, 1053)
+After filtering, number of rows: 33701
+Computing aggregated text embeddings for each patient...
+Aggregated text embeddings shape: (33701, 768)
+Column FIRST_WARDID_struct not found; creating default values.
+Column LAST_WARDID_struct not found; creating default values.
+
+--- Hyperparameters based on processed data ---
+NUM_DISEASES: 33701
+NUM_AGES: 75
+NUM_SEGMENTS: 2
+NUM_ADMISSION_LOCS: 1
+NUM_DISCHARGE_LOCS: 1
+NUM_GENDERS: 2
+NUM_ETHNICITIES: 41
+NUM_INSURANCES: 5
+[Epoch 1] Train Loss: 1.0975
+[Epoch 2] Train Loss: 0.9741
+[Epoch 3] Train Loss: 0.9442
+[Epoch 4] Train Loss: 0.9252
+[Epoch 5] Train Loss: 0.9087
+[Epoch 6] Train Loss: 0.8918
+[Epoch 7] Train Loss: 0.8834
+[Epoch 8] Train Loss: 0.8672
+[Epoch 9] Train Loss: 0.8569
+[Epoch 10] Train Loss: 0.8468
+[Epoch 11] Train Loss: 0.8390
+[Epoch 12] Train Loss: 0.8303
+[Epoch 13] Train Loss: 0.8186
+[Epoch 14] Train Loss: 0.8100
+[Epoch 15] Train Loss: 0.7987
+[Epoch 16] Train Loss: 0.7906
+[Epoch 17] Train Loss: 0.7821
+[Epoch 18] Train Loss: 0.7771
+[Epoch 19] Train Loss: 0.7666
+[Epoch 20] Train Loss: 0.7593
+
+Final Evaluation Metrics (including EDDI):
+Mortality - AUC-ROC: 0.9846, AUPRC: 0.8889, F1: 0.7597, Recall: 0.9289, Precision: 0.6426, EDDI: 0.7999
+Readmission - AUC-ROC: 0.8059, AUPRC: 0.2931, F1: 0.2573, Recall: 0.9150, Precision: 0.1497, EDDI: 0.4805
