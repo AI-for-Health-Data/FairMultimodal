@@ -4,7 +4,6 @@ import matplotlib.pyplot as plt
 import re
 from tqdm import tqdm
 
-# Functions for Demographics
 def calculate_age(dob, intime):
     """Calculate age at time of ICU stay given date of birth and ICU intime."""
     return intime.year - dob.year - ((intime.month, intime.day) < (dob.month, dob.day))
@@ -48,13 +47,12 @@ def categorize_insurance(insurance):
     else:
         return 'Government'
 
-# Functions for Text Preprocessing
 def preprocess1(x):
     """
     Remove extra characters, numeric bullet points, and standardize abbreviations.
     """
-    y = re.sub(r'\[(.*?)\]', '', x)         
-    y = re.sub(r'[0-9]+\.', '', y)           
+    y = re.sub(r'\[(.*?)\]', '', x)
+    y = re.sub(r'[0-9]+\.', '', y)
     y = re.sub(r'dr\.', 'doctor', y)
     y = re.sub(r'm\.d\.', 'md', y)
     y = re.sub(r'admission date:', '', y)
@@ -65,7 +63,7 @@ def preprocess1(x):
 def preprocessing(df):
     """
     Preprocess the 'TEXT' column of a dataframe: remove newlines, extra whitespace,
-    convert to lower case, and apply additional cleanup.
+    convert to lower case, and apply cleanup.
     """
     df = df.copy()
     df['TEXT'] = df['TEXT'].fillna(' ')
@@ -76,7 +74,7 @@ def preprocessing(df):
     df['TEXT'] = df['TEXT'].apply(lambda x: preprocess1(x))
     return df
 
-# Functions for Outcome Calculations
+#  Functions for Outcome Calculations
 def calculate_short_term_mortality(icu_stays):
     """
     Create a binary column 'short_term_mortality' based on whether DEATHTIME is present.
@@ -86,32 +84,25 @@ def calculate_short_term_mortality(icu_stays):
 
 def calculate_readmission(icu_stays):
     """
-    Create a binary column 'readmission_within_30_days' based on whether the next ICU
-    admission is within 30 days.
+    Create a binary column 'readmission_within_30_days' based on whether the next ICU admission is within 30 days.
     """
     required = ['DISCHTIME', 'INTIME', 'hadm_id']
     for col in required:
         if col not in icu_stays.columns:
             raise KeyError(f"Column {col} is missing in the input data.")
     
-    # Sort by subject, admission time, and ICU intime
     icu_stays = icu_stays.sort_values(by=['subject_id', 'ADMITTIME', 'INTIME'])
-    
-    # Get the discharge time of the current admission
     icu_stays['current_admission_dischtime'] = icu_stays.groupby(['subject_id', 'hadm_id'])['DISCHTIME'].transform('first')
-    
-    # For each subject, get the next ICU admission's intime and corresponding hadm_id
     icu_stays['next_admission_icu_intime'] = icu_stays.groupby('subject_id')['INTIME'].shift(-1)
     icu_stays['next_hadm_id'] = icu_stays.groupby('subject_id')['hadm_id'].shift(-1)
-    
-    # Calculate readmission if the next ICU admission happens within 30 days of the current discharge time
     icu_stays['readmission_within_30_days'] = (
         (icu_stays['next_admission_icu_intime'] - icu_stays['current_admission_dischtime']).dt.days <= 30
     ).astype(int)
     icu_stays['readmission_within_30_days'] = icu_stays['readmission_within_30_days'].fillna(0).astype(int)
     return icu_stays
 
-# Functions for Splitting Text into Chunks
+
+#  Functions for Splitting Text into Chunks
 def split_text_to_chunks(text, chunk_size=512):
     """
     Split a text into chunks of a given token size.
@@ -126,29 +117,29 @@ def split_into_512_token_columns(text, chunk_size=512):
     Given a text, return a Series with one column per chunk.
     """
     chunks = split_text_to_chunks(text, chunk_size)
-    chunk_dict = {f"note_chunk_{i+1}": chunk for i, chunk in enumerate(chunks)}
+    chunk_dict = {}
+    for i, chunk in enumerate(chunks):
+        chunk_dict[f"note_chunk_{i+1}"] = chunk
     return pd.Series(chunk_dict)
 
-# Data Loading & Preprocessing: STRUCTURED DATA
+
+# File paths for structured data
 admissions_path = 'ADMISSIONS.csv.gz'
 icustays_path   = 'ICUSTAYS.csv.gz'
 patients_path   = 'PATIENTS.csv.gz'
-notes_path      = 'NOTEEVENTS.csv.gz'  # Used later for unstructured
+notes_path      = 'NOTEEVENTS.csv.gz'  
 
-# Read Admissions data
-df_adm = pd.read_csv(admissions_path, compression='gzip', low_memory=False, 
+# Read Admissions, ICU stays, and Patients
+df_adm = pd.read_csv(admissions_path, compression='gzip', low_memory=False,
                      usecols=['SUBJECT_ID', 'HADM_ID', 'ADMITTIME', 'DISCHTIME', 'DEATHTIME', 'ETHNICITY', 'INSURANCE'])
-# Read ICU stays data
-df_icustays = pd.read_csv(icustays_path, compression='gzip', low_memory=False, 
+df_icustays = pd.read_csv(icustays_path, compression='gzip', low_memory=False,
                           usecols=['SUBJECT_ID', 'HADM_ID', 'ICUSTAY_ID', 'INTIME', 'OUTTIME'])
-# Read Patients data
-df_patients = pd.read_csv(patients_path, compression='gzip', low_memory=False, 
+df_patients = pd.read_csv(patients_path, compression='gzip', low_memory=False,
                           usecols=['SUBJECT_ID', 'DOB', 'GENDER'])
-# Read Notes data (used later in unstructured processing)
-df_notes = pd.read_csv(notes_path, compression='gzip', low_memory=False, 
+df_notes = pd.read_csv(notes_path, compression='gzip', low_memory=False,
                        usecols=['SUBJECT_ID', 'HADM_ID', 'CHARTDATE', 'TEXT'])
 
-# Convert datetime columns for admissions
+# Convert datetime columns for Admissions
 df_adm['ADMITTIME'] = pd.to_datetime(df_adm['ADMITTIME'], format='%Y-%m-%d %H:%M:%S', errors='coerce')
 df_adm['DISCHTIME'] = pd.to_datetime(df_adm['DISCHTIME'], format='%Y-%m-%d %H:%M:%S', errors='coerce')
 df_adm['DEATHTIME'] = pd.to_datetime(df_adm['DEATHTIME'], format='%Y-%m-%d %H:%M:%S', errors='coerce')
@@ -160,7 +151,7 @@ df_icustays['OUTTIME'] = pd.to_datetime(df_icustays['OUTTIME'], format='%Y-%m-%d
 # Convert DOB in Patients
 df_patients['DOB'] = pd.to_datetime(df_patients['DOB'], format='%Y-%m-%d', errors='coerce')
 
-# Convert datetime for Notes (CHARTDATE; note that this may only be a date)
+# Convert datetime for Notes (CHARTDATE may only be a date)
 df_notes['CHARTDATE'] = pd.to_datetime(df_notes['CHARTDATE'], format='%Y-%m-%d', errors='coerce')
 
 # Rename columns for consistency
@@ -169,13 +160,11 @@ df_icustays.rename(columns={'SUBJECT_ID': 'subject_id', 'HADM_ID': 'hadm_id'}, i
 df_patients.rename(columns={'SUBJECT_ID': 'subject_id'}, inplace=True)
 df_notes.rename(columns={'SUBJECT_ID': 'subject_id', 'HADM_ID': 'hadm_id'}, inplace=True)
 
-# Merge admissions with ICU stays
+# Merge Admissions with ICU stays and then add patient demographics
 df_icu = pd.merge(df_adm, df_icustays, on=['subject_id', 'hadm_id'], how='inner')
-
-# Merge patient demographics (DOB, GENDER) into the ICU dataframe
 df_icu = pd.merge(df_icu, df_patients[['subject_id', 'DOB', 'GENDER']], on='subject_id', how='left')
 
-# Calculate patient age at the time of ICU INTIME and assign age category
+# Calculate patient age at INTIME and assign age category
 df_icu['age'] = df_icu.apply(lambda row: calculate_age(row['DOB'], row['INTIME']) 
                              if pd.notnull(row['DOB']) and pd.notnull(row['INTIME']) else np.nan, axis=1)
 df_icu['age_category'] = df_icu['age'].apply(lambda x: categorize_age(x) if pd.notnull(x) else 'Unknown')
@@ -184,90 +173,115 @@ df_icu['age_category'] = df_icu['age'].apply(lambda x: categorize_age(x) if pd.n
 df_icu['ethnicity_category'] = df_icu['ETHNICITY'].apply(lambda x: categorize_ethnicity(x) if pd.notnull(x) else 'Other')
 df_icu['insurance_category'] = df_icu['INSURANCE'].apply(lambda x: categorize_insurance(x) if pd.notnull(x) else 'Other')
 
-# Ensure gender is in a consistent format: male or female
+# Ensure gender is in a consistent format
 df_icu['gender'] = df_icu['GENDER'].str.lower().apply(lambda x: 'male' if 'm' in x else ('female' if 'f' in x else x))
 
-# Compute outcomes: short-term mortality and readmission
+# Compute outcomes
 df_icu = calculate_short_term_mortality(df_icu)
 df_icu = calculate_readmission(df_icu)
 
 # Select only the first ICU stay per patient (sorted by INTIME)
 df_first_icu = df_icu.sort_values(by='INTIME').groupby('subject_id').first().reset_index()
 
-# Save structured first ICU dataset (without time-series features)
+# Save structured dataset (includes demographics and outcomes)
 df_first_icu.to_csv('final_first_icu_dataset.csv', index=False)
 print("Structured dataset (first ICU stay) saved as 'final_first_icu_dataset.csv'.")
 
-# Data Loading & Preprocessing: UNSTRUCTURED NOTES (First 24h Only)
+#  Data Loading & Preprocessing: UNSTRUCTURED NOTES (All Notes During ICU Stay)
+# Select all notes corresponding to the first ICU stay based on hadm_id.
+first_icu_notes = df_notes[df_notes['hadm_id'].isin(df_first_icu['hadm_id'])]
 
-# For unstructured notes, we want to work with the first ICU stay only.
-# We already have df_first_icu saved above. Now, we filter notes to the first 24h window.
+# Merge these notes with admission (INTIME) and discharge (DISCHTIME) times and outcomes.
+first_icu_admission = df_first_icu[['subject_id', 'hadm_id', 'INTIME', 'DISCHTIME', 
+                                    'short_term_mortality', 'readmission_within_30_days']].copy()
+first_icu_admission.rename(columns={'INTIME': 'admission_time', 'DISCHTIME': 'discharge_time'}, inplace=True)
+notes_merged = pd.merge(first_icu_notes, first_icu_admission, on=['subject_id', 'hadm_id'], how='inner')
 
-# Merge notes with the first ICU admission information to get the admission timestamp.
-# We use the INTIME from df_first_icu as the reference time.
-df_first_icu_for_notes = df_first_icu[['subject_id', 'hadm_id', 'INTIME']].copy()
-df_first_icu_for_notes.rename(columns={'INTIME': 'admission_time'}, inplace=True)
+# Compute hours since admission
+notes_merged['hours_since_admission'] = (notes_merged['CHARTDATE'] - notes_merged['admission_time']).dt.total_seconds() / 3600
 
-# Merge the notes with the first ICU stay admission time.
-df_notes_merged = pd.merge(df_notes, df_first_icu_for_notes, on=['subject_id', 'hadm_id'], how='inner')
+# Keep only notes recorded during the ICU stay
+notes_filtered = notes_merged[(notes_merged['CHARTDATE'] >= notes_merged['admission_time']) & 
+                              (notes_merged['CHARTDATE'] <= notes_merged['discharge_time'])].copy()
 
-# Compute hours since admission.
-# Note: CHARTDATE is a date only. If you have a more granular CHARTTIME column, use it instead.
-df_notes_merged['hours_since_admission'] = (df_notes_merged['CHARTDATE'] - df_notes_merged['admission_time']).dt.total_seconds() / 3600
+# Aggregate notes by subject and hadm_id by concatenating all TEXT entries and retaining outcomes.
+notes_agg = notes_filtered.groupby(['subject_id', 'hadm_id']).agg({
+    'TEXT': lambda texts: " ".join(texts),
+    'short_term_mortality': 'first',
+    'readmission_within_30_days': 'first'
+}).reset_index()
 
-# Filter to keep only notes written within the first 24 hours after admission.
-df_notes_filtered = df_notes_merged[df_notes_merged['hours_since_admission'].between(0, 24)].copy()
-
-# Aggregate notes by subject and hadm_id (concatenate all TEXT entries)
-notes_agg = df_notes_filtered.groupby(['subject_id', 'hadm_id'])['TEXT'].apply(lambda texts: " ".join(texts)).reset_index()
-
-# Apply text preprocessing to the aggregated notes
+# Clean the aggregated text.
 notes_agg = preprocessing(notes_agg)
 
-# (Optional) You can also check note lengths
-notes_agg['note_length_chars'] = notes_agg['TEXT'].apply(len)
-notes_agg['note_length_words'] = notes_agg['TEXT'].apply(lambda x: len(x.split()))
-print("Max note length (chars):", notes_agg['note_length_chars'].max())
-print("Max note length (words):", notes_agg['note_length_words'].max())
+# Split the aggregated text into 512-token chunks.
+df_note_chunks = notes_agg['TEXT'].apply(split_into_512_token_columns)
+notes_agg = pd.concat([notes_agg, df_note_chunks], axis=1)
 
-# (Optional) Split the aggregated text into 512-token chunks
-note_chunks_df = notes_agg['TEXT'].apply(split_into_512_token_columns)
-notes_agg = pd.concat([notes_agg, note_chunks_df], axis=1)
+# Save the unstructured notes dataset (all notes during ICU stay)
+notes_agg.to_csv('final_unstructured_all_notes.csv', index=False)
+print("Unstructured notes dataset (all notes during ICU stay) saved as 'final_unstructured_all_notes.csv'.")
 
-# Save the unstructured (notes) dataset for the first 24h
-notes_agg.to_csv('final_unstructured_24h_notes.csv', index=False)
-print("Unstructured notes dataset (first 24h) saved as 'final_unstructured_24h_notes.csv'.")
-
-# Merge Structured & Unstructured Data (Optional)
-
-# Load the saved structured dataset (if needed) and the unstructured notes dataset.
-df_structured = pd.read_csv('filtered_structured_output.csv')
-df_unstructured = pd.read_csv('final_unstructured_24h_notes.csv')
-
-# For example, merge on subject_id and hadm_id to have a unified view.
-df_merged = pd.merge(df_structured, df_unstructured, on=['subject_id', 'hadm_id'], how='left')
-
-# Save the merged dataset.
-df_merged.to_csv('merged_first_icu_with_24h_notes.csv', index=False)
-print("Merged dataset saved as 'merged_first_icu_with_24h_notes.csv'.")
-
-# Read the unstructured dataset
-unstructured_file = 'final_unstructured_24h_notes.csv'
+#  Merge Demographics into Unstructured Dataset
+# Load the final unstructured notes dataset.
+unstructured_file = 'final_unstructured_all_notes.csv'
 unstructured_df = pd.read_csv(unstructured_file, engine='python', on_bad_lines='skip')
 print(f"Unstructured notes data shape: {unstructured_df.shape}")
 
-# Read the structured dataset 
-structured_file = 'filtered_structured_output.csv' 
+structured_file = 'filtered_structured_output.csv'
 structured_df = pd.read_csv(structured_file)
 print(f"Structured data shape: {structured_df.shape}")
 
-# Identify common subject IDs
-unstructured_ids = set(unstructured_df['subject_id'].unique())
-structured_ids   = set(structured_df['subject_id'].unique())
-common_ids = unstructured_ids.intersection(structured_ids)
+# For debugging, print available columns in structured_df:
+print("Columns in structured_df:", structured_df.columns.tolist())
+
+# Identify common subject IDs.
+common_ids = set(unstructured_df['subject_id'].unique()).intersection(set(structured_df['subject_id'].unique()))
 print(f"Number of common subject IDs: {len(common_ids)}")
 
 # Filter the unstructured dataset to only those common subjects.
 filtered_unstructured_df = unstructured_df[unstructured_df['subject_id'].isin(common_ids)].copy()
-filtered_unstructured_df.to_csv('filtered_unstructured.csv', index=False)
-print("Filtered unstructured dataset saved as 'filtered_unstructured.csv'.")
+
+# Create an age bucket in the structured dataset if not present.
+def assign_age_bucket(age):
+    if pd.isnull(age):
+        return 'Unknown'
+    if 15 <= age <= 29:
+        return '15-29'
+    elif 30 <= age <= 49:
+        return '30-49'
+    elif 50 <= age <= 69:
+        return '50-69'
+    elif 70 <= age <= 89:
+        return '70-89'
+    else:
+        return 'Other'
+
+if 'age_bucket' not in structured_df.columns:
+    # If the raw age exists (e.g. column 'age'), create age_bucket
+    if 'age' in structured_df.columns:
+        structured_df['age_bucket'] = structured_df['age'].apply(assign_age_bucket)
+    else:
+        print("Column 'age' not found in structured_df. Cannot create 'age_bucket'.")
+
+# Select key demographic columns.
+demo_cols = ['subject_id', 'age', 'age_bucket', 'ethnicity_category', 'insurance_category', 'gender']
+# If some of these columns are missing, adjust accordingly:
+missing_cols = [col for col in demo_cols if col not in structured_df.columns]
+if missing_cols:
+    print(f"Warning: The following demographic columns are missing in structured_df: {missing_cols}")
+    # You may choose to create them here if possible.
+
+# Merge demographics into the filtered unstructured dataset.
+merged_unstructured = pd.merge(filtered_unstructured_df, structured_df[demo_cols], on='subject_id', how='left')
+print("Merged unstructured dataset shape (with demographics):", merged_unstructured.shape)
+
+# Save the final unstructured dataset with demographics.
+merged_unstructured.to_csv('unstructured_with_demographics.csv', index=False)
+print("Unstructured dataset with demographics saved as 'unstructured_with_demographics.csv'.")
+
+#  Final Outcome Counts (for verification)
+mortality_positive = merged_unstructured['short_term_mortality'].sum()
+readmission_positive = merged_unstructured['readmission_within_30_days'].sum()
+print("Number of positive short-term mortality cases:", mortality_positive)
+print("Number of positive readmission cases:", readmission_positive)
