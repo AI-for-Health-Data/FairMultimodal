@@ -18,17 +18,17 @@ df = pd.read_csv('structured_dataset.csv')
 print("Dataset shape:", df.shape)
 print("Dataset columns:", df.columns.tolist())
 
-# --- Map hospital admission IDs to disease codes ---
+# Map hospital admission IDs to disease codes
 unique_diseases = df['hadm_id'].unique()
 disease_mapping = {d: i for i, d in enumerate(unique_diseases)}
 df['mapped_disease_id'] = df['hadm_id'].map(disease_mapping)
 
-# --- Map age to an index ---
+# Map age to an index 
 unique_ages = sorted(df['age'].unique())
 age_mapping = {age: i for i, age in enumerate(unique_ages)}
 df['age_code'] = df['age'].map(age_mapping)
 
-# --- Create demographic codes for ethnicity ---
+# Create demographic codes for ethnicity 
 if 'categorized_ethnicity' not in df.columns:
     if 'ETHNICITY' in df.columns:
         df['categorized_ethnicity'] = df['ETHNICITY'].fillna('Other').str.upper().str.strip()
@@ -40,7 +40,7 @@ if 'categorized_ethnicity' not in df.columns:
 if 'categorized_ethnicity_code' not in df.columns:
     df['categorized_ethnicity_code'] = df['categorized_ethnicity'].astype('category').cat.codes
 
-# --- Convert other categorical features to codes ---
+# Convert other categorical features to codes 
 if 'GENDER' in df.columns:
     df['GENDER'] = df['GENDER'].astype('category').cat.codes
 elif 'gender' in df.columns:
@@ -51,7 +51,7 @@ if 'INSURANCE' in df.columns:
 elif 'insurance' in df.columns:
     df['insurance'] = df['insurance'].astype('category').cat.codes
 
-# --- Map ward IDs to contiguous codes ---
+# Map ward IDs to contiguous codes 
 # For FIRST_WARDID (admission location)
 if 'FIRST_WARDID' in df.columns:
     unique_first_wards = df['FIRST_WARDID'].unique()
@@ -230,10 +230,12 @@ model = BEHRTModel(
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 model.to(device)
 print(model)
+
 # 4. Define Loss, Optimizer, and Scheduler
 criterion = nn.BCEWithLogitsLoss()
 optimizer = AdamW(model.parameters(), lr=1e-5, weight_decay=0.01)
 scheduler = ReduceLROnPlateau(optimizer, mode='max', factor=0.1, patience=2, verbose=True)
+
 # 5. Training Loop
 epochs = 10
 for epoch in range(epochs):
@@ -273,6 +275,7 @@ for epoch in range(epochs):
     avg_loss = total_loss / len(dataset)
     scheduler.step(avg_loss)
     print(f"Epoch {epoch+1}/{epochs} - Total Loss: {total_loss:.4f}")
+
 # 6. Evaluation Function
 def evaluate_model(model, dataloader, device):
     model.eval()
@@ -339,8 +342,6 @@ print("AUPRC:", evaluation_results['auprc'])
 print("Precision:", evaluation_results['precision'])
 print("Recall:", evaluation_results['recall'])
 print("F1 Score:", evaluation_results['f1'])
-import numpy as np
-import pandas as pd
 
 # DataFrame merging and demographic column standardization
 results_df = pd.DataFrame({
@@ -445,7 +446,6 @@ def calculate_eddi_from_d(d_dict):
     return eddi_attr
 
 # Calculate EDDI for each sensitive attribute
-
 # For Age Buckets
 d_age, oer_age = calculate_d_values(results_df, sensitive_attr='age_bucket')
 eddi_age = calculate_eddi_from_d(d_age)
