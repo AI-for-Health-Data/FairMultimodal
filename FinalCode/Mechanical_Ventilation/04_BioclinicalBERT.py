@@ -14,7 +14,7 @@ from torch.utils.data import Dataset, DataLoader
 
 from transformers import AutoTokenizer, AutoModel
 from sklearn.metrics import roc_auc_score, average_precision_score, f1_score, recall_score, precision_score
-from scipy.special import expit  # for logistic sigmoid
+from scipy.special import expit  
 
 # Focal Loss Definition
 class FocalLoss(nn.Module):
@@ -85,7 +85,6 @@ def apply_bioclinicalbert_on_patient_notes(df, note_columns, tokenizer, model, d
             vals = patient_data[col].dropna().tolist()
             notes.extend([v for v in vals if isinstance(v, str) and v.strip() != ""])
         if len(notes) == 0:
-            # Use a vector of zeros if no valid note exists
             aggregated_embeddings.append(np.zeros(model.bert.config.hidden_size))
         else:
             embeddings = []
@@ -148,7 +147,7 @@ def train_model(model, dataloader, optimizer, device, criterion):
     for batch in dataloader:
         embeddings, labels = [x.to(device) for x in batch]
         optimizer.zero_grad()
-        logits = model(embeddings)  # Shape: (batch_size, 1)
+        logits = model(embeddings)  
         loss = criterion(logits, labels)
         loss.backward()
         optimizer.step()
@@ -191,7 +190,6 @@ def evaluate_model(model, dataloader, device, threshold=0.5):
     return metrics
 
 # Inference: Get Predicted Probabilities
-
 def get_patient_probabilities(model, dataloader, device):
     model.eval()
     all_logits = []
@@ -216,35 +214,36 @@ def assign_age_bucket(age):
     else:
         return 'other'
 
-# Fairness Metric: Compute EDDI for a Sensitive Attribute
-
-def compute_eddi(df, sensitive_attr, true_label_col, pred_label_col):
+# New Fairness Metric: Compute Attribute-Level EDDI
+def compute_attribute_eddi(df, sensitive_attr, true_label_col, pred_label_col):
     """
-    Compute the Error Distribution Disparity Index (EDDI) for a given sensitive attribute.
-    
-    EDDI = (1/|S|) * sum_{s in S} (|ER_s - OER| / max(OER, 1-OER))
-    
-    where ER_s is the error rate in subgroup s and OER is the overall error rate.
+    Compute the attribute-level Error Distribution Disparity Index (EDDI) for a given sensitive attribute.
+    For each subgroup s in the sensitive attribute:
+      eddi_s = |error_rate_s - overall_error_rate| / max(overall_error_rate, 1-overall_error_rate)
+    Then aggregate as:
+      attribute_eddi = (sqrt(sum(eddi_s^2 for all groups))) / (number of groups)
     """
     groups = df.groupby(sensitive_attr)
     overall_error = np.mean(df[true_label_col] != df[pred_label_col])
-    eddi_sum = 0.0
-    num_groups = 0
+    eddi_list = []
     for group_name, group_df in groups:
         group_error = np.mean(group_df[true_label_col] != group_df[pred_label_col])
-        eddi_sum += abs(group_error - overall_error) / max(overall_error, 1 - overall_error)
-        num_groups += 1
-    eddi = eddi_sum / num_groups if num_groups > 0 else 0.0
-    return eddi
+        # Avoid division by zero if overall_error is 0 or 1
+        denom = max(overall_error, 1 - overall_error)
+        eddi_value = abs(group_error - overall_error) / denom if denom > 0 else 0.0
+        eddi_list.append(eddi_value)
+    num_groups = len(eddi_list)
+    attribute_eddi = np.sqrt(np.sum(np.square(eddi_list))) / num_groups if num_groups > 0 else 0.0
+    return attribute_eddi
 
 # Main Training and Evaluation Pipeline
-
 def train_pipeline():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("Using device:", device)
 
-    df = pd.read_csv("unstructured_with_demographics.csv", low_memory=False)
-    print("Data shape:", df.shape)
+    # Load the unstructured dataset for prediction
+    df = pd.read_csv("final_unstructured_with_mechanical_ventilation.csv", low_memory=False)
+    print("Data shape (unstructured):", df.shape)
     
     note_columns = [col for col in df.columns if col.startswith("note_")]
     print("Note columns found:", note_columns)
@@ -269,7 +268,7 @@ def train_pipeline():
     )
     print("Aggregated text embeddings shape:", aggregated_embeddings_np.shape)
     
-    # Use unique patients for labels and demographics 
+    # Use unique patients for labels
     df_unique = df_filtered.drop_duplicates(subset="subject_id")
     
     # Mechanical Ventilation labels
@@ -301,9 +300,11 @@ def train_pipeline():
     # Inference and Fairness Evaluation for Mechanical Ventilation
     probs = get_patient_probabilities(classifier, dataloader, device)
     
-    # Build a results dataframe by merging predictions with demographics.
-    demo_cols = ['subject_id', 'age', 'ethnicity_category', 'insurance_category']
-    df_demo = df_unique[demo_cols].copy()
+    # Load the structured dataset that contains the demographics
+    structured_demo = pd.read_csv("final_structured_with_mechanical_ventilation.csv", low_memory=False)
+    # Use the demographic columns as they appear in the structured dataset:
+    demo_cols_structured = ['subject_id', 'age', 'ETHNICITY', 'INSURANCE', 'GENDER']
+    df_demo = structured_demo[demo_cols_structured].copy()
     
     # Create predictions dataframe using patient_ids ordering from aggregated embeddings
     df_probs = pd.DataFrame({
@@ -311,14 +312,12 @@ def train_pipeline():
         'ventilation_prob': probs[:, 0]
     })
     
-    # Merge demographics with prediction probabilities
     df_results = pd.merge(df_demo, df_probs, on='subject_id', how='inner')
     
-    # Compute binary predictions using threshold = 0.5
     threshold = 0.5
     df_results['ventilation_pred'] = (df_results['ventilation_prob'] >= threshold).astype(int)
     
-    # Merge true labels for mechanical ventilation from df_unique
+    # Merge true labels for mechanical ventilation from df_unique (using subject_id)
     df_results = pd.merge(df_results,
                           df_unique[['subject_id', 'mechanical_ventilation']],
                           on='subject_id', how='inner')
@@ -327,18 +326,20 @@ def train_pipeline():
     # Create age buckets for fairness evaluation
     df_results['age_bucket'] = df_results['age'].apply(assign_age_bucket)
     
-    # Fairness Evaluation for Mechanical Ventilation Outcome
-    eddi_ethnicity = compute_eddi(df_results, sensitive_attr='ethnicity_category',
-                                  true_label_col='ventilation_true', pred_label_col='ventilation_pred')
-    eddi_age = compute_eddi(df_results, sensitive_attr='age_bucket',
-                            true_label_col='ventilation_true', pred_label_col='ventilation_pred')
-    eddi_insurance = compute_eddi(df_results, sensitive_attr='insurance_category',
-                                  true_label_col='ventilation_true', pred_label_col='ventilation_pred')
-    overall_eddi = np.mean([eddi_ethnicity, eddi_age, eddi_insurance])
+    # Fairness Evaluation for Mechanical Ventilation Outcome:
+    eddi_age = compute_attribute_eddi(df_results, sensitive_attr='age_bucket',
+                                      true_label_col='ventilation_true', pred_label_col='ventilation_pred')
+    eddi_ethnicity = compute_attribute_eddi(df_results, sensitive_attr='ETHNICITY',
+                                            true_label_col='ventilation_true', pred_label_col='ventilation_pred')
+    eddi_insurance = compute_attribute_eddi(df_results, sensitive_attr='INSURANCE',
+                                            true_label_col='ventilation_true', pred_label_col='ventilation_pred')
+    
+    # Final overall EDDI: take root of sum of squares of age_eddi, ethnicity_eddi, insurance_eddi, then divide by 3
+    overall_eddi = np.sqrt(eddi_age**2 + eddi_ethnicity**2 + eddi_insurance**2) / 3
     
     print("\nFairness Evaluation (Mechanical Ventilation Task):")
-    print("EDDI for Ethnicity:", eddi_ethnicity)
     print("EDDI for Age Bucket:", eddi_age)
+    print("EDDI for Ethnicity:", eddi_ethnicity)
     print("EDDI for Insurance:", eddi_insurance)
     print("Overall EDDI:", overall_eddi)
 
