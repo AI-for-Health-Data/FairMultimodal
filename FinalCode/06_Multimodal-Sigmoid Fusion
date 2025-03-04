@@ -195,12 +195,12 @@ class MultimodalTransformer(nn.Module):
           - Demographics (via BEHRTModel_Demo)
           - Lab features (via BEHRTModel_Lab)
           - Text (aggregated BioClinicalBERT embedding)
-        Each branch is projected to 256 dimensions. The projection is passed through a ReLU
-        and then used to compute a dot product with its sigmoid-activated version. This produces
-        one scalar per branch. The three scalars are concatenated and fed to a classifier.
+        Each branch is projected to 256 dimensions via a linear + ReLU.
+        Learnable sigmoid weights for each branch (of dimension 256) are applied elementwise to the projected
+        embeddings. The final aggregated embedding is obtained by elementwise summing the three adjusted vectors.
+        This aggregated embedding (of dimension 256) is passed through a classifier to yield two logits.
         
-        Note: Previously, subgroup analysis was done using demo.dot. Now we return the final
-        aggregated embedding (a vector of 3 scalars, one from each branch) for the new EDDI calculation.
+        Note: The final aggregated embedding is also returned for the new EDDI calculation.
         """
         super(MultimodalTransformer, self).__init__()
         self.behrt_demo = behrt_demo
@@ -221,11 +221,15 @@ class MultimodalTransformer(nn.Module):
         )
 
         self.classifier = nn.Sequential(
-            nn.Linear(3, hidden_size),
+            nn.Linear(256, hidden_size),
             nn.ReLU(),
             nn.Dropout(0.1),
             nn.Linear(hidden_size, 2)
         )
+        # Learnable parameters for adjusting each branch.
+        self.sig_weights_demo = nn.Parameter(torch.randn(256))
+        self.sig_weights_text = nn.Parameter(torch.randn(256))
+        self.sig_weights_lab = nn.Parameter(torch.randn(256))
 
     def forward(self, demo_dummy_ids, demo_attn_mask,
                 age_ids, gender_ids, ethnicity_ids, insurance_ids,
@@ -238,23 +242,23 @@ class MultimodalTransformer(nn.Module):
         # Text branch
         text_embedding = aggregated_text_embedding
 
-        # Projection
+        # Projection for each branch
         demo_proj = self.demo_projector(demo_embedding)
         lab_proj = self.lab_projector(lab_embedding)
         text_proj = self.text_projector(text_embedding)
 
-        # Sigmoid multiplication
-        demo_sigmoid = torch.sigmoid(demo_proj)
-        lab_sigmoid = torch.sigmoid(lab_proj)
-        text_sigmoid = torch.sigmoid(text_proj)
+        # Apply learnable sigmoid weights to adjust each projected embedding
+        sig_weights_demo = torch.sigmoid(self.sig_weights_demo)  # shape (256,)
+        sig_weights_lab = torch.sigmoid(self.sig_weights_lab)
+        sig_weights_text = torch.sigmoid(self.sig_weights_text)
 
-        # Dot products: one scalar per branch per sample.
-        demo_dot = torch.sum(demo_proj * demo_sigmoid, dim=1, keepdim=True)
-        lab_dot = torch.sum(lab_proj * lab_sigmoid, dim=1, keepdim=True)
-        text_dot = torch.sum(text_proj * text_sigmoid, dim=1, keepdim=True)
+        demo_adjusted = demo_proj * sig_weights_demo
+        lab_adjusted = lab_proj * sig_weights_lab
+        text_adjusted = text_proj * sig_weights_text
 
-        # Final aggregated embedding from all three branches
-        aggregated = torch.cat((demo_dot, lab_dot, text_dot), dim=1)
+        # Aggregate the adjusted outputs elementwise; final dimension is (batch_size, 256)
+        aggregated = demo_adjusted + lab_adjusted + text_adjusted
+
         logits = self.classifier(aggregated)
         mortality_logits = logits[:, 0].unsqueeze(1)
         readmission_logits = logits[:, 1].unsqueeze(1)
@@ -376,7 +380,7 @@ def evaluate_model(model, dataloader, device, threshold=0.5):
     all_readm_logits = torch.cat(all_readm_logits, dim=0)
     all_labels_mort = torch.cat(all_labels_mort, dim=0)
     all_labels_readm = torch.cat(all_labels_readm, dim=0)
-    final_embeddings = torch.cat(all_final_embeddings, dim=0).numpy()  # shape: (N, 3)
+    final_embeddings = torch.cat(all_final_embeddings, dim=0).numpy() 
     ages = torch.cat(all_age, dim=0).numpy()
     ethnicities = torch.cat(all_ethnicity, dim=0).numpy()
     insurances = torch.cat(all_insurance, dim=0).numpy()
@@ -405,7 +409,7 @@ def evaluate_model(model, dataloader, device, threshold=0.5):
         metrics[task] = {"aucroc": aucroc, "auprc": auprc, "f1": f1,
                          "recall": recall, "precision": precision}
     
-    # --- New EDDI Calculation for Each Outcome using the error-rate based formula ---
+    # New EDDI Calculation for Each Outcome using the error-rate based formula 
     # Create binary predictions for each outcome.
     y_pred_mort = (mort_probs > threshold).astype(int)
     y_true_mort = labels_mort_np.astype(int)
@@ -487,8 +491,8 @@ def train_pipeline():
     print("Using device:", device)
 
     # Merge Structured and Unstructured Data 
-    structured_data = pd.read_csv('filtered_structured_output.csv')
-    unstructured_data = pd.read_csv("filtered_unstructured.csv", low_memory=False)
+    structured_data = pd.read_csv('final_structured_common.csv')
+    unstructured_data = pd.read_csv("unstructured_with_demographics.csv", low_memory=False)
     print("\n--- Debug Info: Before Merge ---")
     print("Structured data shape:", structured_data.shape)
     print("Unstructured data shape:", unstructured_data.shape)
