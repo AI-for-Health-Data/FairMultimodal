@@ -14,7 +14,7 @@ from torch.utils.data import Dataset, DataLoader
 
 from transformers import AutoTokenizer, AutoModel
 from sklearn.metrics import roc_auc_score, average_precision_score, f1_score, recall_score, precision_score
-from scipy.special import expit  
+from scipy.special import expit  # for logistic sigmoid
 
 # Focal Loss Definition
 class FocalLoss(nn.Module):
@@ -42,7 +42,7 @@ class FocalLoss(nn.Module):
         else:
             return focal_loss
 
-# Utility Functions for Class Weight Calculation
+# Compute Class Weights (Inverse of Sample Count)
 def compute_class_weights(df, label_column):
     class_counts = df[label_column].value_counts().sort_index()
     total_samples = len(df)
@@ -104,28 +104,23 @@ def apply_bioclinicalbert_on_patient_notes(df, note_columns, tokenizer, model, d
                     emb = model(input_ids, attn_mask)
                 embeddings.append(emb.cpu().numpy())
             embeddings = np.vstack(embeddings)
-            agg_emb = np.mean(embeddings, axis=0) if aggregation == "mean" else np.max(embeddings, axis=0)
+            agg_emb = np.mean(embeddings, axis=0) if aggregation=="mean" else np.max(embeddings, axis=0)
             aggregated_embeddings.append(agg_emb)
     aggregated_embeddings = np.vstack(aggregated_embeddings)
     return aggregated_embeddings, patient_ids
 
-# Unstructured Dataset Definition for Mechanical Ventilation
+# Unstructured Dataset and Classifier for Mechanical Ventilation
 class UnstructuredDataset(Dataset):
-    def __init__(self, embeddings, ventilation_labels):
-        """
-        embeddings: NumPy array of shape (num_patients, hidden_size)
-        ventilation_labels: array or list of binary labels (0/1) for mechanical ventilation
-        """
+    def __init__(self, embeddings, vent_labels):
         self.embeddings = torch.tensor(embeddings, dtype=torch.float32)
-        self.ventilation_labels = torch.tensor(ventilation_labels, dtype=torch.float32).unsqueeze(1)
+        self.vent_labels = torch.tensor(vent_labels, dtype=torch.float32).unsqueeze(1)
 
     def __len__(self):
         return self.embeddings.size(0)
 
     def __getitem__(self, idx):
-        return self.embeddings[idx], self.ventilation_labels[idx]
+        return self.embeddings[idx], self.vent_labels[idx]
 
-# Unstructured Classifier Definition for Mechanical Ventilation
 class UnstructuredClassifier(nn.Module):
     def __init__(self, input_size=768, hidden_size=256):
         super(UnstructuredClassifier, self).__init__()
@@ -133,14 +128,13 @@ class UnstructuredClassifier(nn.Module):
             nn.Linear(input_size, hidden_size),
             nn.ReLU(),
             nn.Dropout(0.1),
-            nn.Linear(hidden_size, 1)  
+            nn.Linear(hidden_size, 1)  # Single output for mechanical ventilation
         )
 
     def forward(self, x):
         logits = self.classifier(x)
         return logits
 
-# Training Function
 def train_model(model, dataloader, optimizer, device, criterion):
     model.train()
     running_loss = 0.0
@@ -154,7 +148,6 @@ def train_model(model, dataloader, optimizer, device, criterion):
         running_loss += loss.item()
     return running_loss / len(dataloader)
 
-# Evaluation Function (for Classification Metrics)
 def evaluate_model(model, dataloader, device, threshold=0.5):
     model.eval()
     all_logits = []
@@ -167,11 +160,11 @@ def evaluate_model(model, dataloader, device, threshold=0.5):
             all_labels.append(labels.cpu())
     all_logits = torch.cat(all_logits, dim=0).numpy()
     all_labels = torch.cat(all_labels, dim=0).numpy()
-    probs = 1 / (1 + np.exp(-all_logits))  # Sigmoid activation
+    probs = expit(all_logits)  # apply logistic sigmoid
     print("Probability stats:")
-    print("Min:", np.min(probs, axis=0))
-    print("Mean:", np.mean(probs, axis=0))
-    print("Max:", np.max(probs, axis=0))
+    print("Min:", np.min(probs))
+    print("Mean:", np.mean(probs))
+    print("Max:", np.max(probs))
     
     preds = (probs >= threshold).astype(int)
     metrics = {}
@@ -186,10 +179,10 @@ def evaluate_model(model, dataloader, device, threshold=0.5):
     f1 = f1_score(all_labels, preds, zero_division=0)
     recall = recall_score(all_labels, preds, zero_division=0)
     precision = precision_score(all_labels, preds, zero_division=0)
-    metrics["mechanical_ventilation"] = {"aucroc": aucroc, "auprc": auprc, "f1": f1, "recall": recall, "precision": precision}
+    metrics["mechanical_ventilation"] = {"aucroc": aucroc, "auprc": auprc, "f1": f1,
+                                          "recall": recall, "precision": precision}
     return metrics
 
-# Inference: Get Predicted Probabilities
 def get_patient_probabilities(model, dataloader, device):
     model.eval()
     all_logits = []
@@ -199,55 +192,68 @@ def get_patient_probabilities(model, dataloader, device):
             logits = model(embeddings)
             all_logits.append(logits.cpu())
     all_logits = torch.cat(all_logits, dim=0).numpy()
-    probs = 1 / (1 + np.exp(-all_logits))
+    probs = expit(all_logits)
     return probs
 
-def assign_age_bucket(age):
-    if 15 <= age <= 29:
-        return '15-29'
-    elif 30 <= age <= 49:
-        return '30-49'
-    elif 50 <= age <= 69:
-        return '50-69'
-    elif 70 <= age <= 89:
-        return '70-89'
-    else:
-        return 'other'
 
-# New Fairness Metric: Compute Attribute-Level EDDI
-def compute_attribute_eddi(df, sensitive_attr, true_label_col, pred_label_col):
-    """
-    Compute the attribute-level Error Distribution Disparity Index (EDDI) for a given sensitive attribute.
-    For each subgroup s in the sensitive attribute:
-      eddi_s = |error_rate_s - overall_error_rate| / max(overall_error_rate, 1-overall_error_rate)
-    Then aggregate as:
-      attribute_eddi = (sqrt(sum(eddi_s^2 for all groups))) / (number of groups)
-    """
+def get_age_bucket(age):
+    if 15 <= age <= 29:
+        return "15-29"
+    elif 30 <= age <= 49:
+        return "30-49"
+    elif 50 <= age <= 69:
+        return "50-69"
+    elif 70 <= age <= 89:
+        return "70-89"
+    else:
+        return "other"
+
+def map_ethnicity(code):
+    mapping = {0: "white", 1: "black", 2: "asian", 3: "hispanic"}
+    return mapping.get(code, "others")
+
+def map_insurance(code):
+    mapping = {
+        0: "government",
+        1: "medicare",
+        2: "medicaid",
+        3: "private",
+        4: "self pay"
+    }
+    return mapping.get(code, "others")
+
+def compute_subgroup_eddi(df, sensitive_attr, true_label_col, pred_label_col):
     groups = df.groupby(sensitive_attr)
     overall_error = np.mean(df[true_label_col] != df[pred_label_col])
-    eddi_list = []
+    subgroup_eddi = {}
     for group_name, group_df in groups:
         group_error = np.mean(group_df[true_label_col] != group_df[pred_label_col])
-        # Avoid division by zero if overall_error is 0 or 1
-        denom = max(overall_error, 1 - overall_error)
-        eddi_value = abs(group_error - overall_error) / denom if denom > 0 else 0.0
-        eddi_list.append(eddi_value)
-    num_groups = len(eddi_list)
-    attribute_eddi = np.sqrt(np.sum(np.square(eddi_list))) / num_groups if num_groups > 0 else 0.0
-    return attribute_eddi
+        norm_factor = max(overall_error, 1 - overall_error)
+        disparity = abs(group_error - overall_error) / norm_factor
+        subgroup_eddi[group_name] = disparity
+    return subgroup_eddi
 
-# Main Training and Evaluation Pipeline
+def compute_aggregated_eddi(df, sensitive_attr, true_label_col, pred_label_col):
+    subgroup_eddi = compute_subgroup_eddi(df, sensitive_attr, true_label_col, pred_label_col)
+    disparities = np.array(list(subgroup_eddi.values()))
+    if len(disparities) == 0:
+        return 0.0
+    aggregated_eddi = np.sqrt(np.sum(disparities ** 2)) / len(disparities)
+    return aggregated_eddi
+
+
 def train_pipeline():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("Using device:", device)
 
-    # Load the unstructured dataset for prediction
     df = pd.read_csv("final_unstructured_with_mechanical_ventilation.csv", low_memory=False)
-    print("Data shape (unstructured):", df.shape)
+    print("Unstructured data shape:", df.shape)
     
+    # Identify note columns
     note_columns = [col for col in df.columns if col.startswith("note_")]
     print("Note columns found:", note_columns)
     
+    # Filter rows that have at least one valid note.
     def has_valid_note(row):
         for col in note_columns:
             if pd.notnull(row[col]) and isinstance(row[col], str) and row[col].strip():
@@ -256,36 +262,35 @@ def train_pipeline():
     df_filtered = df[df.apply(has_valid_note, axis=1)].copy()
     print("After filtering, number of rows:", len(df_filtered))
     
-    # Prepare tokenizer and BioClinicalBERT model
+    # Prepare tokenizer and BioClinicalBERT model.
     tokenizer = AutoTokenizer.from_pretrained("emilyalsentzer/Bio_ClinicalBERT")
     bioclinical_bert_base = AutoModel.from_pretrained("emilyalsentzer/Bio_ClinicalBERT")
     bioclinical_bert_ft = BioClinicalBERT_FT(bioclinical_bert_base, bioclinical_bert_base.config, device).to(device)
     
-    # Compute aggregated text embeddings for each patient
+    # Compute aggregated text embeddings for each patient.
     print("Computing aggregated text embeddings for each patient...")
     aggregated_embeddings_np, patient_ids = apply_bioclinicalbert_on_patient_notes(
-        df_filtered, note_columns, tokenizer, bioclinical_bert_ft, device, aggregation="mean", max_length=128
+        df_filtered, note_columns, tokenizer, bioclinical_bert_ft, device,
+        aggregation="mean", max_length=128
     )
-    print("Aggregated text embeddings shape:", aggregated_embeddings_np.shape)
+    print("Aggregated embeddings shape:", aggregated_embeddings_np.shape)
     
-    # Use unique patients for labels
+    # Use unique patients for labels.
     df_unique = df_filtered.drop_duplicates(subset="subject_id")
-    
-    # Mechanical Ventilation labels
-    ventilation_labels = df_unique["mechanical_ventilation"].values
+    vent_labels = df_unique["mechanical_ventilation"].values
 
-    # Build dataset and dataloader for the classifier
-    dataset = UnstructuredDataset(aggregated_embeddings_np, ventilation_labels)
+    # Build dataset and dataloader.
+    dataset = UnstructuredDataset(aggregated_embeddings_np, vent_labels)
     dataloader = DataLoader(dataset, batch_size=16, shuffle=True)
 
-    # Instantiate classifier
+    # Instantiate the unstructured classifier.
     classifier = UnstructuredClassifier(input_size=768, hidden_size=256).to(device)
     
-    # Compute class weights for mechanical ventilation outcome
-    class_weights_vent = compute_class_weights(df_unique, "mechanical_ventilation")
-    pos_weight_vent = torch.tensor(class_weights_vent.iloc[1], dtype=torch.float, device=device)
+    # Compute class weights for mechanical ventilation.
+    class_weights = compute_class_weights(df_unique, "mechanical_ventilation")
+    pos_weight = torch.tensor(class_weights.iloc[1], dtype=torch.float, device=device)
     
-    criterion = FocalLoss(gamma=2, pos_weight=pos_weight_vent, reduction='mean')
+    criterion = FocalLoss(gamma=2, pos_weight=pos_weight, reduction='mean')
     optimizer = AdamW(classifier.parameters(), lr=2e-5)
     
     num_epochs = 10
@@ -297,51 +302,53 @@ def train_pipeline():
             print(f"[Epoch {epoch+1}/{num_epochs}] Threshold: {thresh} Metrics: {metrics}")
     print("Training complete.")
     
-    # Inference and Fairness Evaluation for Mechanical Ventilation
+    # Inference and Fairness Evaluation for Mechanical Ventilation.
     probs = get_patient_probabilities(classifier, dataloader, device)
     
-    # Load the structured dataset that contains the demographics
-    structured_demo = pd.read_csv("final_structured_with_mechanical_ventilation.csv", low_memory=False)
-    # Use the demographic columns as they appear in the structured dataset:
-    demo_cols_structured = ['subject_id', 'age', 'ETHNICITY', 'INSURANCE', 'GENDER']
-    df_demo = structured_demo[demo_cols_structured].copy()
+    # Load structured demographics dataset. This CSV should include: subject_id, age, ETHNICITY, INSURANCE.
+    structured_demo = pd.read_csv("final_structured_with_mechanical_ventilation.csv", low_memory=False).head(1000)
+    demo_cols = ['subject_id', 'age', 'ETHNICITY', 'INSURANCE']
+    df_demo = structured_demo[demo_cols].copy()
     
-    # Create predictions dataframe using patient_ids ordering from aggregated embeddings
+    # Build predictions dataframe using the ordering from aggregated embeddings.
     df_probs = pd.DataFrame({
         'subject_id': patient_ids,
         'ventilation_prob': probs[:, 0]
     })
     
+    # Merge predictions with demographics.
     df_results = pd.merge(df_demo, df_probs, on='subject_id', how='inner')
-    
     threshold = 0.5
     df_results['ventilation_pred'] = (df_results['ventilation_prob'] >= threshold).astype(int)
     
-    # Merge true labels for mechanical ventilation from df_unique (using subject_id)
+    # Merge the true mechanical ventilation labels from the unstructured dataset.
     df_results = pd.merge(df_results,
                           df_unique[['subject_id', 'mechanical_ventilation']],
                           on='subject_id', how='inner')
     df_results.rename(columns={'mechanical_ventilation': 'ventilation_true'}, inplace=True)
     
-    # Create age buckets for fairness evaluation
-    df_results['age_bucket'] = df_results['age'].apply(assign_age_bucket)
+    # Create age buckets using get_age_bucket.
+    df_results['age_bucket'] = df_results['age'].apply(get_age_bucket)
     
-    # Fairness Evaluation for Mechanical Ventilation Outcome:
-    eddi_age = compute_attribute_eddi(df_results, sensitive_attr='age_bucket',
-                                      true_label_col='ventilation_true', pred_label_col='ventilation_pred')
-    eddi_ethnicity = compute_attribute_eddi(df_results, sensitive_attr='ETHNICITY',
-                                            true_label_col='ventilation_true', pred_label_col='ventilation_pred')
-    eddi_insurance = compute_attribute_eddi(df_results, sensitive_attr='INSURANCE',
-                                            true_label_col='ventilation_true', pred_label_col='ventilation_pred')
+    # Optionally, if ethnicity and insurance are encoded as numbers, map them using the helper functions.
+    df_results['ETHNICITY'] = df_results['ETHNICITY'].apply(map_ethnicity)
+    df_results['INSURANCE'] = df_results['INSURANCE'].apply(map_insurance)
     
-    # Final overall EDDI: take root of sum of squares of age_eddi, ethnicity_eddi, insurance_eddi, then divide by 3
+    # Evaluate fairness using sensitive attributes: age_bucket, ETHNICITY, INSURANCE.
+    for sensitive_attr in ['age_bucket', 'ETHNICITY', 'INSURANCE']:
+        subgroup_eddi = compute_subgroup_eddi(df_results, sensitive_attr, 'ventilation_true', 'ventilation_pred')
+        agg_eddi = compute_aggregated_eddi(df_results, sensitive_attr, 'ventilation_true', 'ventilation_pred')
+        print(f"\nSubgroup EDDI for {sensitive_attr}:")
+        for group, disparity in subgroup_eddi.items():
+            print(f"  {group}: {disparity:.4f}")
+        print(f"Aggregated EDDI for {sensitive_attr}: {agg_eddi:.4f}")
+    
+    # Overall attribute-level fairness EDDI (average of the three).
+    eddi_age = compute_aggregated_eddi(df_results, 'age_bucket', 'ventilation_true', 'ventilation_pred')
+    eddi_ethnicity = compute_aggregated_eddi(df_results, 'ETHNICITY', 'ventilation_true', 'ventilation_pred')
+    eddi_insurance = compute_aggregated_eddi(df_results, 'INSURANCE', 'ventilation_true', 'ventilation_pred')
     overall_eddi = np.sqrt(eddi_age**2 + eddi_ethnicity**2 + eddi_insurance**2) / 3
-    
-    print("\nFairness Evaluation (Mechanical Ventilation Task):")
-    print("EDDI for Age Bucket:", eddi_age)
-    print("EDDI for Ethnicity:", eddi_ethnicity)
-    print("EDDI for Insurance:", eddi_insurance)
-    print("Overall EDDI:", overall_eddi)
+    print("\nOverall Attribute-Level EDDI for Mechanical Ventilation:", overall_eddi)
 
 if __name__ == "__main__":
     train_pipeline()
