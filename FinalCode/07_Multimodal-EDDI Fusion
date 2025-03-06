@@ -16,11 +16,9 @@ from torch.utils.data import TensorDataset, DataLoader
 from transformers import BertModel, BertConfig, AutoTokenizer
 from sklearn.metrics import roc_auc_score, average_precision_score, f1_score, recall_score, precision_score
 
-# Global debug flag; set to True to print debug info.
 DEBUG = True
 
-# 1. Loss Functions and Class Weight Computation
-
+# Loss Functions and Class Weight Computation
 class FocalLoss(nn.Module):
     def __init__(self, gamma=2, alpha=None, reduction='mean', pos_weight=None):
         super(FocalLoss, self).__init__()
@@ -63,8 +61,7 @@ def get_pos_weight(labels_series, device, clip_max=10.0):
         print("Positive weight:", weight.item())
     return weight
 
-# 2. BioClinicalBERT Fine-Tuning and Note Aggregation
-
+# BioClinicalBERT Fine-Tuning and Note Aggregation
 class BioClinicalBERT_FT(nn.Module):
     """
     A fine-tuning wrapper for BioClinicalBERT.
@@ -77,7 +74,7 @@ class BioClinicalBERT_FT(nn.Module):
 
     def forward(self, input_ids, attention_mask):
         outputs = self.BioBert(input_ids=input_ids, attention_mask=attention_mask)
-        cls_embedding = outputs.last_hidden_state[:, 0, :]  # CLS token
+        cls_embedding = outputs.last_hidden_state[:, 0, :]  
         return cls_embedding
 
 def apply_bioclinicalbert_on_patient_notes(df, note_columns, tokenizer, model, device, aggregation="mean"):
@@ -120,9 +117,8 @@ def apply_bioclinicalbert_on_patient_notes(df, note_columns, tokenizer, model, d
     aggregated_embeddings = np.vstack(aggregated_embeddings)
     return aggregated_embeddings
 
-# 3. BEHRT Models for Structured Data
-
-# 3a. Demographics Branch
+# BEHRT Models for Structured Data
+# Demographics Branch
 class BEHRTModel_Demo(nn.Module):
     def __init__(self, num_ages, num_genders, num_ethnicities, num_insurances, hidden_size=768):
         """
@@ -163,7 +159,7 @@ class BEHRTModel_Demo(nn.Module):
         demo_embedding = cls_token + extra
         return demo_embedding
 
-# 3b. Lab Features Branch
+# Lab Features Branch
 class BEHRTModel_Lab(nn.Module):
     def __init__(self, lab_token_count, hidden_size=768, nhead=8, num_layers=2):
         """
@@ -187,22 +183,15 @@ class BEHRTModel_Lab(nn.Module):
         lab_embedding = x.mean(dim=1)
         return lab_embedding
 
-# 4. Multimodal Transformer: Fusion of Branches for Dual-Task Output
+# Multimodal Transformer: Fusion of Branches for Dual-Task Output
 class MultimodalTransformer(nn.Module):
     def __init__(self, text_embed_size, behrt_demo, behrt_lab, device):
-        """
-        This model fuses three modalities (demographics, labs, and text)
-        to predict two outcomes: short-term mortality and readmission.
-        For each modality, the branch output is projected into a 256-dimensional vector.
-        For each task, we compute a modality scalar by summing the projected features,
-        then use an EDDI-based weighting mechanism.
-        """
+
         super(MultimodalTransformer, self).__init__()
         self.behrt_demo = behrt_demo
         self.behrt_lab = behrt_lab
         self.device = device
 
-        # Shared projection layers (for simplicity) for both tasks.
         self.demo_projector = nn.Sequential(
             nn.Linear(behrt_demo.bert.config.hidden_size, 256),
             nn.ReLU()
@@ -219,7 +208,6 @@ class MultimodalTransformer(nn.Module):
     def forward(self, demo_dummy_ids, demo_attn_mask,
                 age_ids, gender_ids, ethnicity_ids, insurance_ids,
                 lab_features, aggregated_text_embedding, beta=1.0):
-        # Compute embeddings from each branch
         demo_embedding = self.behrt_demo(demo_dummy_ids, demo_attn_mask,
                                          age_ids, gender_ids, ethnicity_ids, insurance_ids)
         lab_embedding = self.behrt_lab(lab_features)
@@ -256,12 +244,11 @@ class MultimodalTransformer(nn.Module):
         # Return both logits and the mortality EDDI components (for analysis)
         return mortality_logit, readmission_logit, (demo_EDDI_mort, lab_EDDI_mort, text_EDDI_mort, EDDI_max_mort)
 
-# 5. Training and Evaluation Functions
+# Training and Evaluation Functions
 def train_step(model, dataloader, optimizer, device, criterion, beta=1.0, loss_gamma=1.0, target=1.0):
     """
     Training step with loss = BCE_mortality + BCE_readmission + loss_gamma * EDDI_loss.
     EDDI_loss is computed as the squared error between the mortality logit and a target.
-    (Here we apply the additional loss only on the mortality branch; you can extend it similarly.)
     """
     model.train()
     running_loss = 0.0
@@ -282,7 +269,7 @@ def train_step(model, dataloader, optimizer, device, criterion, beta=1.0, loss_g
 
         loss_mort = criterion(mortality_logit, labels_mortality.unsqueeze(1))
         loss_readm = criterion(readmission_logit, labels_readmission.unsqueeze(1))
-        eddi_loss = ((mortality_logit - target) ** 2).mean()  # additional loss on mortality branch
+        eddi_loss = ((mortality_logit - target) ** 2).mean()  
         loss = loss_mort + loss_readm + loss_gamma * eddi_loss
 
         loss.backward()
@@ -291,7 +278,6 @@ def train_step(model, dataloader, optimizer, device, criterion, beta=1.0, loss_g
         running_loss += loss.item()
     return running_loss
 
-# Helper functions for sensitive attribute mapping
 def get_age_bucket(age):
     if 15 <= age <= 29:
         return "15-29"
@@ -312,12 +298,11 @@ def map_insurance(code):
     mapping = {0: "Medicare", 1: "Medicaid", 2: "Private", 3: "Self-pay", 4: "Other"}
     return mapping.get(code, "other")
 
-# Helper function to compute subgroup-level EDDI for one sensitive attribute.
 def compute_eddi_subgroup(true_labels, predicted_probs, sensitive_labels, threshold=0.5):
     """
     For a given outcome, compute the binary error rates.
     Then, for each subgroup (given by sensitive_labels), compute the normalized disparity relative to
-    the overall error rate. The normalization factor is the max(overall_error, 1 - overall_error).
+    the overall error rate. The normalization factor is max(overall_error, 1 - overall_error).
     
     Returns:
       overall_error: overall error rate.
@@ -342,13 +327,42 @@ def compute_eddi_subgroup(true_labels, predicted_probs, sensitive_labels, thresh
         eddi = np.nan
     return overall_error, subgroup_disparities, eddi
 
-def evaluate_model(model, dataloader, device, threshold=0.5):
+def compute_eddi(y_true, y_pred, sensitive_labels):
+    """
+    Computes the EDDI for a given sensitive attribute for one outcome.
+    
+    For each subgroup s:
+      ER_s = mean(y_pred != y_true) for that subgroup.
+    OER = overall error rate over all samples.
+    Then for each subgroup:
+      EDDI_s = (ER_s - OER) / max(OER, 1-OER)
+    And attribute-level EDDI is computed as:
+      EDDI_attr = sqrt(sum_s (EDDI_s^2)) / number_of_subgroups.
+    
+    Returns:
+      eddi_attr: the computed attribute-level EDDI.
+      subgroup_eddi: dictionary mapping subgroup to its EDDI value.
+    """
+    unique_groups = np.unique(sensitive_labels)
+    subgroup_eddi = {}
+    overall_error = np.mean(y_pred != y_true)
+    denom = max(overall_error, 1 - overall_error) if overall_error not in [0, 1] else 1.0
+    for group in unique_groups:
+        mask = (sensitive_labels == group)
+        if np.sum(mask) == 0:
+            subgroup_eddi[group] = np.nan
+        else:
+            er_group = np.mean(y_pred[mask] != y_true[mask])
+            subgroup_eddi[group] = (er_group - overall_error) / denom
+    eddi_attr = np.sqrt(np.sum(np.array(list(subgroup_eddi.values()))**2)) / len(unique_groups)
+    return eddi_attr, subgroup_eddi
+
+def evaluate_model(model, dataloader, device, threshold=0.5, print_eddi=False):
     model.eval()
     all_mort_logits = []
     all_readm_logits = []
     all_labels_mort = []
     all_labels_readm = []
-    # Collect sensitive attributes for subgroup analysis.
     all_age = []
     all_ethnicity = []
     all_insurance = []
@@ -360,13 +374,13 @@ def evaluate_model(model, dataloader, device, threshold=0.5):
              lab_features,
              aggregated_text_embedding,
              labels_mortality, labels_readmission) = [x.to(device) for x in batch]
-            mort_logit, readm_logit, (demo_EDDI, _, _, _) = model(
+            mort_logits, readm_logits, _ = model(
                 demo_dummy_ids, demo_attn_mask,
                 age_ids, gender_ids, ethnicity_ids, insurance_ids,
-                lab_features, aggregated_text_embedding, beta=1.0
+                lab_features, aggregated_text_embedding
             )
-            all_mort_logits.append(mort_logit.cpu())
-            all_readm_logits.append(readm_logit.cpu())
+            all_mort_logits.append(mort_logits.cpu())
+            all_readm_logits.append(readm_logits.cpu())
             all_labels_mort.append(labels_mortality.cpu())
             all_labels_readm.append(labels_readmission.cpu())
             all_age.append(age_ids.cpu())
@@ -384,7 +398,6 @@ def evaluate_model(model, dataloader, device, threshold=0.5):
     labels_readm_np = all_labels_readm.numpy().squeeze()
     
     metrics = {}
-    # Compute standard metrics for both tasks.
     for task, probs, labels in zip(["mortality", "readmission"],
                                    [mort_probs, readm_probs],
                                    [labels_mort_np, labels_readm_np]):
@@ -403,50 +416,123 @@ def evaluate_model(model, dataloader, device, threshold=0.5):
         metrics[task] = {"aucroc": aucroc, "auprc": auprc, "f1": f1,
                          "recall": recall, "precision": precision}
     
-    # Prepare sensitive attributes (convert codes to groups)
-    age_all = torch.cat(all_age, dim=0).numpy().squeeze()
-    ethnicity_all = torch.cat(all_ethnicity, dim=0).numpy().squeeze()
-    insurance_all = torch.cat(all_insurance, dim=0).numpy().squeeze()
+    # Concatenate sensitive attributes from all batches
+    ages = torch.cat(all_age, dim=0).numpy().squeeze()
+    ethnicities = torch.cat(all_ethnicity, dim=0).numpy().squeeze()
+    insurances = torch.cat(all_insurance, dim=0).numpy().squeeze()
     
-    age_groups = np.array([get_age_bucket(a) for a in age_all])
-    ethnicity_groups = np.array([map_ethnicity(e) for e in ethnicity_all])
-    insurance_groups = np.array([map_insurance(i) for i in insurance_all])
+    # Map sensitive attributes
+    age_groups = np.array([get_age_bucket(a) for a in ages])
+    ethnicity_groups = np.array([map_ethnicity(e) for e in ethnicities])
+    insurance_groups = np.array([map_insurance(i) for i in insurances])
     
-    # Compute subgroup-level EDDI for mortality outcome.
-    _, age_subgrp_mort, eddi_age_mort = compute_eddi_subgroup(labels_mort_np, mort_probs, age_groups, threshold)
-    _, eth_subgrp_mort, eddi_eth_mort = compute_eddi_subgroup(labels_mort_np, mort_probs, ethnicity_groups, threshold)
-    _, ins_subgrp_mort, eddi_ins_mort = compute_eddi_subgroup(labels_mort_np, mort_probs, insurance_groups, threshold)
-    total_eddi_mort = np.mean([eddi_age_mort, eddi_eth_mort, eddi_ins_mort])
+    # Fixed subgroup orders for detailed printouts
+    age_order = ["15-29", "30-49", "50-69", "70-89", "others"]
+    ethnicity_order = ["white", "black", "hispanic", "asian", "others"]
+    insurance_order = ["government", "medicare", "Medicaid", "private", "self pay", "others"]
     
-    # Compute subgroup-level EDDI for readmission outcome.
-    _, age_subgrp_readm, eddi_age_readm = compute_eddi_subgroup(labels_readm_np, readm_probs, age_groups, threshold)
-    _, eth_subgrp_readm, eddi_eth_readm = compute_eddi_subgroup(labels_readm_np, readm_probs, ethnicity_groups, threshold)
-    _, ins_subgrp_readm, eddi_ins_readm = compute_eddi_subgroup(labels_readm_np, readm_probs, insurance_groups, threshold)
-    total_eddi_readm = np.mean([eddi_age_readm, eddi_eth_readm, eddi_ins_readm])
-    
-    metrics["eddi_mortality"] = {
-        "age": {"subgroups": age_subgrp_mort, "eddi": eddi_age_mort},
-        "ethnicity": {"subgroups": eth_subgrp_mort, "eddi": eddi_eth_mort},
-        "insurance": {"subgroups": ins_subgrp_mort, "eddi": eddi_ins_mort},
-        "total_eddi": total_eddi_mort
-    }
-    metrics["eddi_readmission"] = {
-        "age": {"subgroups": age_subgrp_readm, "eddi": eddi_age_readm},
-        "ethnicity": {"subgroups": eth_subgrp_readm, "eddi": eddi_eth_readm},
-        "insurance": {"subgroups": ins_subgrp_readm, "eddi": eddi_ins_readm},
-        "total_eddi": total_eddi_readm
-    }
-    
-    return metrics, all_mort_logits, all_readm_logits
+    # Mortality outcome EDDI
+    eddi_age_mort, age_eddi_sub_mort = compute_eddi(labels_mort_np.astype(int), (mort_probs > threshold).astype(int), age_groups)
+    eddi_eth_mort, eth_eddi_sub_mort = compute_eddi(labels_mort_np.astype(int), (mort_probs > threshold).astype(int), ethnicity_groups)
+    eddi_ins_mort, ins_eddi_sub_mort = compute_eddi(labels_mort_np.astype(int), (mort_probs > threshold).astype(int), insurance_groups)
+    age_scores = [age_eddi_sub_mort.get(bucket, 0) for bucket in age_order]
+    eth_scores = [eth_eddi_sub_mort.get(group, 0) for group in ethnicity_order]
+    ins_scores = [ins_eddi_sub_mort.get(group, 0) for group in insurance_order]
+    overall_age_eddi_mort = np.sqrt(np.sum(np.square(age_scores))) / len(age_order)
+    overall_eth_eddi_mort = np.sqrt(np.sum(np.square(eth_scores))) / len(ethnicity_order)
+    overall_ins_eddi_mort = np.sqrt(np.sum(np.square(ins_scores))) / len(insurance_order)
+    total_eddi_mort = np.sqrt((overall_age_eddi_mort**2 + overall_eth_eddi_mort**2 + overall_ins_eddi_mort**2)) / 3
 
-# 6. Main Training Pipeline
+    # Readmission outcome EDDI
+    eddi_age_readm, age_eddi_sub_readm = compute_eddi(labels_readm_np.astype(int), (readm_probs > threshold).astype(int), age_groups)
+    eddi_eth_readm, eth_eddi_sub_readm = compute_eddi(labels_readm_np.astype(int), (readm_probs > threshold).astype(int), ethnicity_groups)
+    eddi_ins_readm, ins_eddi_sub_readm = compute_eddi(labels_readm_np.astype(int), (readm_probs > threshold).astype(int), insurance_groups)
+    age_scores_readm = [age_eddi_sub_readm.get(bucket, 0) for bucket in age_order]
+    eth_scores_readm = [eth_eddi_sub_readm.get(group, 0) for group in ethnicity_order]
+    ins_scores_readm = [ins_eddi_sub_readm.get(group, 0) for group in insurance_order]
+    overall_age_eddi_readm = np.sqrt(np.sum(np.square(age_scores_readm))) / len(age_order)
+    overall_eth_eddi_readm = np.sqrt(np.sum(np.square(eth_scores_readm))) / len(ethnicity_order)
+    overall_ins_eddi_readm = np.sqrt(np.sum(np.square(ins_scores_readm))) / len(insurance_order)
+    total_eddi_readm = np.sqrt((overall_age_eddi_readm**2 + overall_eth_eddi_readm**2 + overall_ins_eddi_readm**2)) / 3
+    
+    if print_eddi:
+        print("\n--- EDDI Calculation for Mortality Outcome ---")
+        print("Age Buckets EDDI (mortality):")
+        for bucket in age_order:
+            score = age_eddi_sub_mort.get(bucket, np.nan)
+            print(f"  {bucket}: {score:.4f}")
+        print("Overall Age EDDI (mortality):", overall_age_eddi_mort)
+        
+        print("\nEthnicity Groups EDDI (mortality):")
+        for group in ethnicity_order:
+            score = eth_eddi_sub_mort.get(group, np.nan)
+            print(f"  {group}: {score:.4f}")
+        print("Overall Ethnicity EDDI (mortality):", overall_eth_eddi_mort)
+        
+        print("\nInsurance Groups EDDI (mortality):")
+        for group in insurance_order:
+            score = ins_eddi_sub_mort.get(group, np.nan)
+            print(f"  {group}: {score:.4f}")
+        print("Overall Insurance EDDI (mortality):", overall_ins_eddi_mort)
+        print("\nFinal Overall Mortality EDDI: {:.4f}".format(total_eddi_mort))
+        
+        print("\n--- EDDI Calculation for Readmission Outcome ---")
+        print("Age Buckets EDDI (readmission):")
+        for bucket in age_order:
+            score = age_eddi_sub_readm.get(bucket, np.nan)
+            print(f"  {bucket}: {score:.4f}")
+        print("Overall Age EDDI (readmission):", overall_age_eddi_readm)
+        
+        print("\nEthnicity Groups EDDI (readmission):")
+        for group in ethnicity_order:
+            score = eth_eddi_sub_readm.get(group, np.nan)
+            print(f"  {group}: {score:.4f}")
+        print("Overall Ethnicity EDDI (readmission):", overall_eth_eddi_readm)
+        
+        print("\nInsurance Groups EDDI (readmission):")
+        for group in insurance_order:
+            score = ins_eddi_sub_readm.get(group, np.nan)
+            print(f"  {group}: {score:.4f}")
+        print("Overall Insurance EDDI (readmission):", overall_ins_eddi_readm)
+        print("\nFinal Overall Readmission EDDI: {:.4f}".format(total_eddi_readm))
+    
+    metrics["eddi_stats"] = {
+        "mortality": {
+            "age_subgroup_eddi": age_eddi_sub_mort,
+            "age_eddi": overall_age_eddi_mort,
+            "ethnicity_subgroup_eddi": eth_eddi_sub_mort,
+            "ethnicity_eddi": overall_eth_eddi_mort,
+            "insurance_subgroup_eddi": ins_eddi_sub_mort,
+            "insurance_eddi": overall_ins_eddi_mort,
+            "final_EDDI": total_eddi_mort
+        },
+        "readmission": {
+            "age_subgroup_eddi": age_eddi_sub_readm,
+            "age_eddi": overall_age_eddi_readm,
+            "ethnicity_subgroup_eddi": eth_eddi_sub_readm,
+            "ethnicity_eddi": overall_eth_eddi_readm,
+            "insurance_subgroup_eddi": ins_eddi_sub_readm,
+            "insurance_eddi": overall_ins_eddi_readm,
+            "final_EDDI": total_eddi_readm
+        }
+    }
+    
+    unique_subgroups = {
+        "age": list(np.unique(age_groups)),
+        "ethnicity": list(np.unique(ethnicity_groups)),
+        "insurance": list(np.unique(insurance_groups))
+    }
+    
+    return metrics, all_mort_logits, unique_subgroups
+
+# Main Training Pipeline
 def train_pipeline():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("Using device:", device)
 
     # Merge Structured and Unstructured Data 
-    structured_data = pd.read_csv('filtered_structured_output.csv')
-    unstructured_data = pd.read_csv("filtered_unstructured.csv", low_memory=False)
+    structured_data = pd.read_csv('final_structured_common.csv')
+    unstructured_data = pd.read_csv("unstructured_with_demographics.csv", low_memory=False)
     print("\n--- Debug Info: Before Merge ---")
     print("Structured data shape:", structured_data.shape)
     print("Unstructured data shape:", unstructured_data.shape)
@@ -571,7 +657,6 @@ def train_pipeline():
     optimizer = torch.optim.Adam(multimodal_model.parameters(), lr=1e-5)
     scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=2, verbose=True)
     mortality_pos_weight = get_pos_weight(df_filtered["short_term_mortality"], device)
-    # Use the same criterion for both tasks
     criterion = FocalLoss(gamma=2, pos_weight=mortality_pos_weight, reduction='mean')
 
     max_epochs = 20
@@ -603,11 +688,47 @@ def train_pipeline():
 
     print("Training complete.")
     
-    # Final evaluation: get metrics for both tasks.
-    final_metrics, mort_logits, readm_logits = evaluate_model(multimodal_model, dataloader, device, threshold=0.5)
-    print("\nFinal Evaluation Metrics:")
-    for task in final_metrics:
-        print(f"{task.capitalize()}: {final_metrics[task]}")
+    # Final evaluation: get metrics for both tasks with detailed EDDI statistics.
+    final_metrics, mort_logits, unique_subgroups = evaluate_model(multimodal_model, dataloader, device, threshold=0.5, print_eddi=True)
+    print("\n--- Final Evaluation Metrics ---")
+    print("Mortality:")
+    print("  AUROC     : {:.4f}".format(final_metrics["mortality"]["aucroc"]))
+    print("  AUPRC     : {:.4f}".format(final_metrics["mortality"]["auprc"]))
+    print("  F1 Score  : {:.4f}".format(final_metrics["mortality"]["f1"]))
+    print("  Recall    : {:.4f}".format(final_metrics["mortality"]["recall"]))
+    print("  Precision : {:.4f}".format(final_metrics["mortality"]["precision"]))
+    print("Readmission:")
+    print("  AUROC     : {:.4f}".format(final_metrics["readmission"]["aucroc"]))
+    print("  AUPRC     : {:.4f}".format(final_metrics["readmission"]["auprc"]))
+    print("  F1 Score  : {:.4f}".format(final_metrics["readmission"]["f1"]))
+    print("  Recall    : {:.4f}".format(final_metrics["readmission"]["recall"]))
+    print("  Precision : {:.4f}".format(final_metrics["readmission"]["precision"]))
+
+    print("\n--- Final EDDI Statistics ---")
+    print("Mortality EDDI Stats:")
+    print("  Age subgroup EDDI      :", final_metrics["eddi_stats"]["mortality"]["age_subgroup_eddi"])
+    print("  Aggregated age_eddi    : {:.4f}".format(final_metrics["eddi_stats"]["mortality"]["age_eddi"]))
+    print("  Ethnicity subgroup EDDI:", final_metrics["eddi_stats"]["mortality"]["ethnicity_subgroup_eddi"])
+    print("  Aggregated ethnicity_eddi: {:.4f}".format(final_metrics["eddi_stats"]["mortality"]["ethnicity_eddi"]))
+    print("  Insurance subgroup EDDI:", final_metrics["eddi_stats"]["mortality"]["insurance_subgroup_eddi"])
+    print("  Aggregated insurance_eddi: {:.4f}".format(final_metrics["eddi_stats"]["mortality"]["insurance_eddi"]))
+    print("  Final Overall Mortality EDDI: {:.4f}".format(final_metrics["eddi_stats"]["mortality"]["final_EDDI"]))
+
+    print("\nReadmission EDDI Stats:")
+    print("  Age subgroup EDDI      :", final_metrics["eddi_stats"]["readmission"]["age_subgroup_eddi"])
+    print("  Aggregated age_eddi    : {:.4f}".format(final_metrics["eddi_stats"]["readmission"]["age_eddi"]))
+    print("  Ethnicity subgroup EDDI:", final_metrics["eddi_stats"]["readmission"]["ethnicity_subgroup_eddi"])
+    print("  Aggregated ethnicity_eddi: {:.4f}".format(final_metrics["eddi_stats"]["readmission"]["ethnicity_eddi"]))
+    print("  Insurance subgroup EDDI:", final_metrics["eddi_stats"]["readmission"]["insurance_subgroup_eddi"])
+    print("  Aggregated insurance_eddi: {:.4f}".format(final_metrics["eddi_stats"]["readmission"]["insurance_eddi"]))
+    print("  Final Overall Readmission EDDI: {:.4f}".format(final_metrics["eddi_stats"]["readmission"]["final_EDDI"]))
+
+    print("\n--- Unique Subgroups ---")
+    print("Age subgroups      :", unique_subgroups["age"])
+    print("Ethnicity subgroups:", unique_subgroups["ethnicity"])
+    print("Insurance subgroups:", unique_subgroups["insurance"])
+
+    print("Training complete.")
 
 if __name__ == "__main__":
     train_pipeline()
