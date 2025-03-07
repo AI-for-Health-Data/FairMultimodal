@@ -1,0 +1,115 @@
+Using device: cuda
+
+--- Debug Info: Before Merge ---
+Structured data shape: (33138, 172)
+Unstructured data shape: (39262, 1034)
+After filtering, number of rows: 33138
+Computing aggregated text embeddings for each patient...
+Aggregated text embeddings shape: (33138, 768)
+Number of lab feature columns: 148
+
+--- Demographics Hyperparameters ---
+NUM_AGES: 75
+NUM_GENDERS: 2
+NUM_ETHNICITIES: 41
+NUM_INSURANCES: 5
+NUM_LAB_FEATURES (tokens): 148
+Positive weight: 9.882759094238281
+Positive weight: 9.98740005493164
+[Epoch 1] Train Loss: 1.7106
+[Epoch 2] Train Loss: 1.4304
+[Epoch 3] Train Loss: 1.3501
+[Epoch 4] Train Loss: 1.3071
+[Epoch 5] Train Loss: 1.2839
+[Epoch 6] Train Loss: 1.2626
+[Epoch 7] Train Loss: 1.2476
+[Epoch 8] Train Loss: 1.2419
+[Epoch 9] Train Loss: 1.2288
+[Epoch 10] Train Loss: 1.2249
+[Epoch 11] Train Loss: 1.2129
+[Epoch 12] Train Loss: 1.2057
+[Epoch 13] Train Loss: 1.2036
+[Epoch 14] Train Loss: 1.1907
+[Epoch 15] Train Loss: 1.1838
+[Epoch 16] Train Loss: 1.1783
+[Epoch 17] Train Loss: 1.1727
+[Epoch 18] Train Loss: 1.1688
+[Epoch 19] Train Loss: 1.1620
+[Epoch 20] Train Loss: 1.1620
+
+--- EDDI Calculation for Mortality Outcome ---
+Age Buckets EDDI (mortality):
+  15-29: -0.0376
+  30-49: -0.0246
+  50-69: -0.0175
+  70-89: 0.0348
+Overall Age EDDI (mortality): 0.014851522590741054
+
+Ethnicity Groups EDDI (mortality):
+  asian: 0.0302
+  black: -0.0785
+  hispanic: -0.0785
+  others: -0.0003
+  white: -0.0785
+Overall Ethnicity EDDI (mortality): 0.027844970430375655
+
+Insurance Groups EDDI (mortality):
+  government: -0.0450
+  medicaid: 0.0262
+  medicare: -0.0107
+  private: -0.0296
+  self pay: -0.0109
+Overall Insurance EDDI (mortality): 0.012366105173274924
+
+Total EDDI for Mortality: 0.01129813484453805
+
+--- EDDI Calculation for Readmission Outcome ---
+Age Buckets EDDI (readmission):
+  15-29: -0.2704
+  30-49: -0.1323
+  50-69: -0.0182
+  70-89: 0.1178
+Overall Age EDDI (readmission): 0.08093977898106343
+
+Ethnicity Groups EDDI (readmission):
+  asian: -0.0167
+  black: 1.0000
+  hispanic: 0.0091
+  others: 0.0002
+  white: -0.1051
+Overall Ethnicity EDDI (readmission): 0.20113725276041974
+
+Insurance Groups EDDI (readmission):
+  government: -0.1553
+  medicaid: 0.1100
+  medicare: -0.0202
+  private: -0.1265
+  self pay: -0.2208
+Overall Insurance EDDI (readmission): 0.06369240722908105
+
+Total EDDI for Readmission: 0.07532460495758597
+
+Final Evaluation Metrics (including subgroup-level EDDI):
+Mortality - AUC-ROC: 0.9713, AUPRC: 0.8262, F1: 0.6919, Recall: 0.8890, Precision: 0.5663
+Readmission - AUC-ROC: 0.7417, AUPRC: 0.3094, F1: 0.2863, Recall: 0.6369, Precision: 0.1847
+
+Final Detailed EDDI Statistics:
+
+Mortality EDDI Stats:
+  Age subgroup EDDI      : {'15-29': -0.037555848590755954, '30-49': -0.02456104874908554, '50-69': -0.017464916471791762, '70-89': 0.03479042089166592}
+  Aggregated age_eddi      : 0.0149
+  Ethnicity subgroup EDDI  : {'asian': 0.03021734539958419, 'black': -0.07846519347804862, 'hispanic': -0.07846519347804862, 'others': -0.00033426198075985303, 'white': -0.07846519347804862}
+  Aggregated ethnicity_eddi: 0.0278
+  Insurance subgroup EDDI  : {'government': -0.04501655495852268, 'medicaid': 0.026205209227463666, 'medicare': -0.010675952745142702, 'private': -0.029610800742711812, 'self pay': -0.010910326772488524}
+  Aggregated insurance_eddi: 0.0124
+  Final Overall Mortality EDDI: 0.0113
+
+Readmission EDDI Stats:
+  Age subgroup EDDI      : {'15-29': -0.270391088748402, '30-49': -0.13226119245087165, '50-69': -0.01823952607327465, '70-89': 0.11782580757034507}
+  Aggregated age_eddi      : 0.0809
+  Ethnicity subgroup EDDI  : {'asian': -0.01669738027860387, 'black': 1.0, 'hispanic': 0.009073160191533819, 'others': 0.00023609956480306413, 'white': -0.10508891812741394}
+  Aggregated ethnicity_eddi: 0.2011
+  Insurance subgroup EDDI  : {'government': -0.15532023258775093, 'medicaid': 0.11003071377748465, 'medicare': -0.020197996689444414, 'private': -0.12653505968660203, 'self pay': -0.22083445256622178}
+  Aggregated insurance_eddi: 0.0637
+  Final Overall Readmission EDDI: 0.0753
+Training complete.
