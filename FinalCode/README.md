@@ -47,7 +47,8 @@ This repository contains code and notebooks to preprocess structured and unstruc
 - **Details:**  
   - This script combines both structured and unstructured datasets to create a multimodal prediction model.  
   - The results from this run are stored in `05_average.log`.
-
+    
+### 4.1. Multimodal
 ---
 
 ## How to Use
@@ -62,7 +63,7 @@ This repository contains code and notebooks to preprocess structured and unstruc
    - For unstructured data, run the script `BioclinicalBert.py` and check the output in `unstruct.log`.
 
 3. **Multimodal Prediction:**
-   - Execute `Multimodal.py` to run the multimodal prediction.  
-   - Check the output in `multi.log`.
+   - Execute `05_multimodal_Average_Fusion.py` to run the multimodal prediction.  
+   - Check the output in `05_average.log`.
 
 
