@@ -1,0 +1,71 @@
+Using device: cuda
+After filtering, number of rows: 33138
+Computing aggregated text embeddings for each patient...
+Aggregated text embeddings shape: (33138, 768)
+Positive weight: 0.13230369985103607
+
+--- Hyperparameters based on processed data ---
+NUM_DISEASES: 33138
+NUM_AGES: 75
+NUM_SEGMENTS: 2
+NUM_ADMISSION_LOCS: 14
+NUM_DISCHARGE_LOCS: 14
+NUM_GENDERS: 2
+NUM_ETHNICITIES: 41
+NUM_INSURANCES: 5
+[Epoch 1] Train Loss: 0.0303
+[Epoch 2] Train Loss: 0.0267
+[Epoch 3] Train Loss: 0.0259
+[Epoch 4] Train Loss: 0.0254
+[Epoch 5] Train Loss: 0.0249
+[Epoch 6] Train Loss: 0.0245
+[Epoch 7] Train Loss: 0.0241
+[Epoch 8] Train Loss: 0.0239
+[Epoch 9] Train Loss: 0.0235
+[Epoch 10] Train Loss: 0.0233
+[Epoch 11] Train Loss: 0.0231
+[Epoch 12] Train Loss: 0.0229
+[Epoch 13] Train Loss: 0.0227
+[Epoch 14] Train Loss: 0.0226
+[Epoch 15] Train Loss: 0.0224
+[Epoch 16] Train Loss: 0.0222
+[Epoch 17] Train Loss: 0.0220
+[Epoch 18] Train Loss: 0.0219
+[Epoch 19] Train Loss: 0.0218
+[Epoch 20] Train Loss: 0.0216
+
+Final Evaluation Metrics for Mechanical Ventilation Prediction:
+AUC-ROC: 0.8734, AUPRC: 0.9812, F1: 0.7233, Recall: 0.5694, Precision: 0.9911
+
+=== EDDI Calculation for Mechanical Ventilation ===
+
+Sensitive Attribute: Age Groups
+Overall Error Rate: 0.4944
+  Subgroup 15-29: d(s) = -0.0042
+  Subgroup 30-49: d(s) = 0.0079
+  Subgroup 50-69: d(s) = 0.0011
+  Subgroup 70-89: d(s) = -0.0042
+Attribute-level EDDI for Age Groups: 0.0025
+
+
+Sensitive Attribute: Ethnicity Groups
+Overall Error Rate: 0.4944
+  Subgroup asian: d(s) = 0.0023
+  Subgroup black: d(s) = 0.0111
+  Subgroup hispanic: d(s) = 0.0438
+  Subgroup others: d(s) = -0.0003
+  Subgroup white: d(s) = 0.4955
+Attribute-level EDDI for Ethnicity Groups: 0.0995
+
+
+Sensitive Attribute: Insurance Groups
+Overall Error Rate: 0.4944
+  Subgroup government: d(s) = -0.0321
+  Subgroup medicaid: d(s) = -0.0100
+  Subgroup medicare: d(s) = 0.0280
+  Subgroup private: d(s) = 0.0111
+  Subgroup self pay: d(s) = -0.0316
+Attribute-level EDDI for Insurance Groups: 0.0110
+
+Overall EDDI for Mechanical Ventilation: 0.0334
+Training complete.

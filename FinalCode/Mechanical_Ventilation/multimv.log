@@ -1,0 +1,99 @@
+Using device: cuda
+After filtering, number of rows: 33138
+Computing aggregated text embeddings for each patient...
+Aggregated text embeddings shape: (33138, 768)
+
+--- Hyperparameters based on processed data ---
+NUM_DISEASES: 33138
+NUM_AGES: 75
+NUM_SEGMENTS: 2
+NUM_ADMISSION_LOCS: 14
+NUM_DISCHARGE_LOCS: 14
+NUM_GENDERS: 2
+NUM_ETHNICITIES: 41
+NUM_INSURANCES: 5
+[Epoch 1] Train Loss: 0.0054
+[Epoch 2] Train Loss: 0.0050
+[Epoch 3] Train Loss: 0.0048
+[Epoch 4] Train Loss: 0.0047
+[Epoch 5] Train Loss: 0.0046
+[Epoch 6] Train Loss: 0.0045
+[Epoch 7] Train Loss: 0.0045
+[Epoch 8] Train Loss: 0.0044
+[Epoch 9] Train Loss: 0.0043
+[Epoch 10] Train Loss: 0.0043
+[Epoch 11] Train Loss: 0.0042
+[Epoch 12] Train Loss: 0.0042
+[Epoch 13] Train Loss: 0.0041
+[Epoch 14] Train Loss: 0.0041
+[Epoch 15] Train Loss: 0.0040
+[Epoch 16] Train Loss: 0.0040
+[Epoch 17] Train Loss: 0.0039
+[Epoch 18] Train Loss: 0.0039
+[Epoch 19] Train Loss: 0.0038
+[Epoch 20] Train Loss: 0.0038
+
+Final Evaluation Metrics for Mechanical Ventilation Prediction:
+AUC-ROC: 0.9123, AUPRC: 0.9877, F1: 0.5046, Recall: 0.3374, Precision: 1.0000
+
+=== EDDI Calculation for Mechanical Ventilation ===
+
+Sensitive Attribute: Age Groups
+Overall Error Rate: 0.6548
+  Subgroup 15-29: d(s) = -0.0152
+  Subgroup 30-49: d(s) = 0.0029
+  Subgroup 50-69: d(s) = -0.0031
+  Subgroup 70-89: d(s) = 0.0040
+Attribute-level EDDI for Age Groups: 0.0041
+
+
+Sensitive Attribute: Ethnicity Groups
+Overall Error Rate: 0.6548
+  Subgroup asian: d(s) = 0.1612
+  Subgroup black: d(s) = -0.2364
+  Subgroup hispanic: d(s) = -0.0141
+  Subgroup others: d(s) = 0.0000
+  Subgroup white: d(s) = -0.0494
+Attribute-level EDDI for Ethnicity Groups: 0.0581
+
+
+Sensitive Attribute: Insurance Groups
+Overall Error Rate: 0.6548
+  Subgroup Medicaid: d(s) = 0.0013
+  Subgroup government: d(s) = -0.0311
+  Subgroup medicare: d(s) = -0.0006
+  Subgroup private: d(s) = 0.0010
+  Subgroup self pay: d(s) = -0.0007
+Attribute-level EDDI for Insurance Groups: 0.0062
+
+
+Sensitive Attribute: Age Groups
+Overall Error Rate: 0.6548
+  Subgroup 15-29: d(s) = -0.0152
+  Subgroup 30-49: d(s) = 0.0029
+  Subgroup 50-69: d(s) = -0.0031
+  Subgroup 70-89: d(s) = 0.0040
+Attribute-level EDDI for Age Groups: 0.0041
+
+
+Sensitive Attribute: Ethnicity Groups
+Overall Error Rate: 0.6548
+  Subgroup asian: d(s) = 0.1612
+  Subgroup black: d(s) = -0.2364
+  Subgroup hispanic: d(s) = -0.0141
+  Subgroup others: d(s) = 0.0000
+  Subgroup white: d(s) = -0.0494
+Attribute-level EDDI for Ethnicity Groups: 0.0581
+
+
+Sensitive Attribute: Insurance Groups
+Overall Error Rate: 0.6548
+  Subgroup Medicaid: d(s) = 0.0013
+  Subgroup government: d(s) = -0.0311
+  Subgroup medicare: d(s) = -0.0006
+  Subgroup private: d(s) = 0.0010
+  Subgroup self pay: d(s) = -0.0007
+Attribute-level EDDI for Insurance Groups: 0.0062
+
+Overall EDDI for Mechanical Ventilation: 0.0195
+Training complete.
