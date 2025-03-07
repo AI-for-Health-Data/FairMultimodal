@@ -91,25 +91,3 @@ Subgroup EDDI for insurance_category (Outcome: readmission):
 Aggregated EDDI for insurance_category (Outcome: readmission): 0.0135
 
 Final Overall EDDI for Readmission: 0.0055
-
---- Detailed Age EDDI ---
-    15-29: 0.0320
-    30-49: 0.0247
-    50-69: 0.0123
-    70-89: 0.0308
-    other: 0.0046
-
---- Detailed Ethnicity EDDI ---
-    white: 0.0000
-    black: 0.0000
-    hispanic: 0.0000
-    asian: 0.0000
-    others: 0.0000
-
---- Detailed Insurance EDDI ---
-    government: 0.0000
-    medicare: 0.0000
-    Medicaid: 0.0240
-    private: 0.0000
-    self pay: 0.0000
-    others: 0.0000
