@@ -12,11 +12,11 @@ This repository contains code and notebooks to preprocess structured and unstruc
 ## 1. Preprocessing
 
 - **Structured Data:**  
-  - Notebook: `FinalCode/Structure_preprocessig.ipynb`  
+  - Notebook: `FinalCode/Structure_preprocessig_final.ipynb`  
   - Purpose: Create and preprocess the structured dataset.
 
 - **Unstructured Data:**  
-  - Notebook: `FinalCode/Unstructure_preproceesing.ipynb`  
+  - Notebook: `FinalCode/Unstructure_preproceesing_final.ipynb`  
   - Purpose: Create and preprocess the unstructured dataset.
 
 ---
@@ -34,19 +34,19 @@ This repository contains code and notebooks to preprocess structured and unstruc
 ## 3. Prediction on Unstructured Data
 
 - **Model:** BioClinicalBERT  
-- **File:** `FinalCode/BioclinicalBert.py`  
+- **File:** `FinalCode/04_BioclinicalBERT.py`  
 - **Details:**  
   - This script processes the unstructured dataset using the BioClinicalBERT model to predict the same outcomes (short-term mortality and readmission).  
-  - The output of this process is saved in the file `unstruct.log`.
+  - The output of this process is saved in the file `04_bio.log`.
 
 ---
 
 ## 4. Multimodal Approach
 
-- **File:** `FinalCode/Multimodal.py`  
+- **File:** `FinalCode/05_Multimodal_Average_Fusion.py`  
 - **Details:**  
   - This script combines both structured and unstructured datasets to create a multimodal prediction model.  
-  - The results from this run are stored in `multi.log`.
+  - The results from this run are stored in `05_average.log`.
 
 ---
 
@@ -54,8 +54,8 @@ This repository contains code and notebooks to preprocess structured and unstruc
 
 1. **Run Preprocessing:**  
    Execute the preprocessing notebooks to generate the datasets.
-   - For structured data: Run `Structure_preprocessig.ipynb`
-   - For unstructured data: Run `Unstructure_preproceesing.ipynb`
+   - For structured data: Run `Structure_preprocessing_final.ipynb`
+   - For unstructured data: Run `Unstructure_preproceesing_final.ipynb`
 
 2. **Run Predictions:**
    - For structured data, review the results in `BEHRT.ipynb`.
