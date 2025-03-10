@@ -3,10 +3,6 @@ import numpy as np
 import re
 from tqdm import tqdm
 
-########################################
-# Functions for Demographics & Text Processing
-########################################
-
 def calculate_age(dob, intime):
     """Calculate age at time of ICU stay given date of birth and ICU intime."""
     return intime.year - dob.year - ((intime.month, intime.day) < (dob.month, dob.day))
@@ -96,10 +92,7 @@ def split_into_512_token_columns(text, chunk_size=512):
         chunk_dict[f"note_chunk_{i+1}"] = chunk
     return pd.Series(chunk_dict)
 
-########################################
 # Functions for Outcome Calculations
-########################################
-
 def calculate_short_term_mortality(df):
     """
     Create a binary column 'short_term_mortality' based on whether DEATHTIME is present.
@@ -117,11 +110,8 @@ def calculate_los_outcome(df):
     df['los_gt_3'] = (df['icu_los_days'] > 3).astype(int)
     return df
 
-########################################
-# 1. Structured Dataset Creation
-########################################
 
-# File paths for structured data
+# Structured Dataset Creation
 admissions_path = 'ADMISSIONS.csv.gz'
 icustays_path   = 'ICUSTAYS.csv.gz'
 patients_path   = 'PATIENTS.csv.gz'
@@ -178,10 +168,8 @@ df_first_icu = df_icu.sort_values(by='INTIME').groupby('subject_id').first().res
 df_first_icu.to_csv('final_first_icu_dataset.csv', index=False)
 print("Structured dataset (first ICU stay) saved as 'final_first_icu_dataset.csv'.")
 
-########################################
-# 2. Unstructured Dataset Creation (Notes)
-########################################
 
+# 2. Unstructured Dataset Creation (Notes)
 # File path for Notes.
 notes_path = 'NOTEEVENTS.csv.gz'
 df_notes = pd.read_csv(notes_path, compression='gzip', low_memory=False,
@@ -229,10 +217,8 @@ notes_agg = pd.concat([notes_agg, df_note_chunks], axis=1)
 notes_agg.to_csv('final_unstructured_all_notes.csv', index=False)
 print("Unstructured notes dataset saved as 'final_unstructured_all_notes.csv'.")
 
-########################################
-# 3. Filtering Both Datasets to Common Subject IDs
-########################################
 
+# 3. Filtering Both Datasets to Common Subject IDs
 # Load the structured and unstructured datasets.
 structured_df = pd.read_csv('final_first_icu_dataset.csv')
 unstructured_df = pd.read_csv('final_unstructured_all_notes.csv', engine='python', on_bad_lines='skip')
@@ -254,10 +240,7 @@ filtered_unstructured.to_csv('filtered_unstructured_dataset.csv', index=False)
 print("Filtered structured dataset saved as 'filtered_structured_dataset.csv'.")
 print("Filtered unstructured dataset saved as 'filtered_unstructured_dataset.csv'.")
 
-########################################
 # 4. Add Feature Set C: Aggregation in 2-Hour Bins over First 24 Hours
-########################################
-
 # Load the filtered structured dataset.
 structured_df = pd.read_csv('filtered_structured_first_icu_stays.csv')
 filtered_subjects = set(structured_df['subject_id'].unique())
@@ -377,10 +360,8 @@ output_file = 'final_structured_with_feature_set_C_24h_2h_bins.csv'
 merged_features.to_csv(output_file, index=False)
 print(f"\nFinal dataset saved as {output_file}")
 
-########################################
-# 5. Final Summary and Printing
-########################################
 
+# 5. Final Summary and Printing
 print(f"\nFinal Dataset Shape: {merged_features.shape}")
 print("Columns in Final Dataset:")
 print(merged_features.columns.tolist())
@@ -391,7 +372,7 @@ if 'los_gt_3' in merged_features.columns:
 else:
     print("Column 'los_gt_3' not found in final dataset.")
 
-# (Optional) Load unstructured data and filter to common subjects.
+# Load unstructured data and filter to common subjects.
 unstructured_df = pd.read_csv('filtered_unstructured.csv', low_memory=False)
 print(f"\nUnstructured dataset shape: {unstructured_df.shape}")
 
