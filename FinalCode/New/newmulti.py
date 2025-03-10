@@ -21,10 +21,7 @@ import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 from scipy.stats import chi2_contingency, ttest_ind
 
-########################################
 # 1. Loss and Class Weight Functions
-########################################
-
 class FocalLoss(nn.Module):
     def __init__(self, gamma=2, alpha=None, reduction='mean', pos_weight=None):
         super(FocalLoss, self).__init__()
@@ -63,10 +60,8 @@ def get_pos_weight(labels_series, device):
         weight = torch.tensor(negative / positive, dtype=torch.float, device=device)
     return weight
 
-########################################
-# 2. Helper Functions for Bucketing and Mapping
-########################################
 
+# 2. Helper Functions for Bucketing and Mapping
 def get_age_bucket(age):
     if 15 <= age <= 29:
         return "15-29"
@@ -87,10 +82,7 @@ def map_insurance(i):
     mapping = {0: "government", 1: "medicare", 2: "Medicaid", 3: "private", 4: "self pay"}
     return mapping.get(i, "others")
 
-########################################
 # 3. EDDI Computation Functions
-########################################
-
 def compute_eddi(y_true, y_pred, sensitive_labels):
     """
     Computes the Error Distribution Disparity Index (EDDI) for one outcome.
@@ -112,10 +104,8 @@ def compute_eddi(y_true, y_pred, sensitive_labels):
     eddi_attr = np.sqrt(np.sum(np.array(list(subgroup_eddi.values())) ** 2)) / len(unique_groups)
     return eddi_attr, subgroup_eddi
 
-########################################
-# 4. BioClinicalBERT Fine-Tuning Wrapper & Text Embedding Aggregation
-########################################
 
+# 4. BioClinicalBERT Fine-Tuning Wrapper & Text Embedding Aggregation
 class BioClinicalBERT_FT(nn.Module):
     def __init__(self, base_model, config, device):
         super(BioClinicalBERT_FT, self).__init__()
@@ -161,10 +151,8 @@ def apply_bioclinicalbert_on_patient_notes(df, note_columns, tokenizer, model, d
     aggregated_embeddings = np.vstack(aggregated_embeddings)
     return aggregated_embeddings, patient_ids
 
-########################################
-# 5. Structured Data: BEHRT Model Definition
-########################################
 
+# 5. Structured Data: BEHRT Model Definition
 class BEHRTModel(nn.Module):
     def __init__(self, num_diseases, num_ages, num_segments, num_admission_locs, num_discharge_locs, 
                  num_genders, num_ethnicities, num_insurances, hidden_size=768):
@@ -214,10 +202,8 @@ class BEHRTModel(nn.Module):
         cls_embedding = cls_token + extra
         return cls_embedding
 
-########################################
-# 6. Multimodal Transformer Model Definition
-########################################
 
+# 6. Multimodal Transformer Model Definition
 class MultimodalTransformer(nn.Module):
     def __init__(self, text_embed_size, BEHRT, device, hidden_size=512):
         super(MultimodalTransformer, self).__init__()
@@ -251,10 +237,8 @@ class MultimodalTransformer(nn.Module):
         los_logits = logits[:, 1].unsqueeze(1)
         return mortality_logits, los_logits
 
-########################################
-# 7. Training and Evaluation Functions for Multimodal Model
-########################################
 
+# 7. Training and Evaluation Functions for Multimodal Model
 def train_step(model, dataloader, optimizer, device, criterion):
     model.train()
     running_loss = 0.0
@@ -420,10 +404,8 @@ def evaluate_model(model, dataloader, device, threshold=0.5, print_eddi=False):
     metrics["eddi_stats"]["overall"] = {"mortality": total_eddi_mort, "los": total_eddi_los}
     return metrics
 
-########################################
-# 8. Main Training and Evaluation Pipeline
-########################################
 
+# 8. Main Training and Evaluation Pipeline
 def train_pipeline():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("Using device:", device)
