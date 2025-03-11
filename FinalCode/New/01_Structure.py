@@ -3,12 +3,12 @@ import numpy as np
 import re
 from datetime import timedelta
 
+# Calculate age at ICU admission given date of birth and admission time.
 def calculate_age(dob, intime):
-    """Calculate age at ICU admission."""
     return intime.year - dob.year - ((intime.month, intime.day) < (dob.month, dob.day))
 
+# Categorize age into predefined bins.
 def categorize_age(age):
-    """Categorize age into bins."""
     if 15 <= age <= 29:
         return '15-29'
     elif 30 <= age <= 49:
@@ -20,8 +20,8 @@ def categorize_age(age):
     else:
         return 'Other'
 
+# Simplify ethnicity descriptions.
 def categorize_ethnicity(ethnicity):
-    """Simplify ethnicity descriptions."""
     eth = str(ethnicity).upper()
     if eth in ['WHITE', 'WHITE - RUSSIAN', 'WHITE - OTHER EUROPEAN', 'WHITE - BRAZILIAN', 'WHITE - EASTERN EUROPEAN']:
         return 'White'
@@ -34,8 +34,8 @@ def categorize_ethnicity(ethnicity):
     else:
         return 'Other'
 
+# Categorize insurance based on keyword matching.
 def categorize_insurance(insurance):
-    """Categorize insurance based on keyword matching."""
     ins = str(insurance).upper()
     if 'MEDICARE' in ins:
         return 'Medicare'
@@ -48,19 +48,14 @@ def categorize_insurance(insurance):
     else:
         return 'Government'
 
+# Calculate short-term mortality using the presence of DEATHTIME.
 def calculate_short_term_mortality(df):
-    """
-    Create a binary column 'short_term_mortality' based on presence of DEATHTIME.
-    """
     df['short_term_mortality'] = df['DEATHTIME'].notnull().astype(int)
     return df
 
+# Determine mechanical ventilation based on signals from CHARTEVENTS and PROCEDUREEVENTS_MV.
 def calculate_mechanical_ventilation():
-    """
-    Load ventilation-related signals from CHARTEVENTS and PROCEDUREEVENTS_MV,
-    and create a single 'mechanical_ventilation' indicator.
-    """
-    # --- CHARTEVENTS ---
+    # Load relevant CHARTEVENTS
     chartevents = pd.read_csv(
         'CHARTEVENTS.csv.gz', compression='gzip', low_memory=False,
         usecols=['ICUSTAY_ID', 'CHARTTIME', 'ITEMID', 'VALUE', 'ERROR']
@@ -69,7 +64,7 @@ def calculate_mechanical_ventilation():
     chartevents = chartevents[chartevents['value'].notnull()]
     chartevents = chartevents[(chartevents['error'] != 1) | (chartevents['error'].isnull())]
 
-    # Define ventilation-related ITEMIDs.
+    # Define a list of ITEMIDs related to ventilation.
     vent_itemids = [
         720, 223848, 223849, 467,
         445, 448, 449, 450, 1340, 1486, 1600, 224687,
@@ -87,6 +82,7 @@ def calculate_mechanical_ventilation():
     ]
     chartevents = chartevents[chartevents['itemid'].isin(vent_itemids)]
 
+    # Define a function to set ventilation flags based on itemid and value.
     def determine_flags(row):
         mechvent = 0
         oxygen = 0
@@ -94,7 +90,7 @@ def calculate_mechanical_ventilation():
         self_extubated = 0
         iv = row['itemid']
         val = row['value']
-        # Mechanical Ventilation Conditions:
+        # Conditions for mechanical ventilation.
         if iv == 720 and val != 'Other/Remarks':
             mechvent = 1
         if iv == 223848 and val != 'Other':
@@ -112,7 +108,7 @@ def calculate_mechanical_ventilation():
                   3459, 501, 502, 503, 224702,
                   223, 667, 668, 669, 670, 671, 672, 224701]:
             mechvent = 1
-        # Oxygen Therapy Conditions:
+        # Conditions for oxygen therapy.
         if iv == 226732 and val in ['Nasal cannula', 'Face tent', 'Aerosol-cool', 'Trach mask ',
                                     'High flow neb', 'Non-rebreather', 'Venti mask ', 'Medium conc mask ',
                                     'T-piece', 'High flow nasal cannula', 'Ultrasonic neb', 'Vapomist']:
@@ -122,7 +118,7 @@ def calculate_mechanical_ventilation():
                                   'Vapotherm', 'T-Piece', 'Hood', 'Hut', 'TranstrachealCat',
                                   'Heated Neb', 'Ultrasonic Neb']:
             oxygen = 1
-        # Extubation Conditions:
+        # Conditions for extubation.
         if iv == 640 and val in ['Extubated', 'Self Extubation']:
             extubated = 1
         if iv == 640 and val == 'Self Extubation':
@@ -143,7 +139,7 @@ def calculate_mechanical_ventilation():
         'selfextubated': 'max'
     })
 
-    # --- PROCEDUREEVENTS_MV for extubation ---
+    # Process PROCEDUREEVENTS_MV to capture extubation events.
     proc_events = pd.read_csv(
         'PROCEDUREEVENTS_MV.csv.gz', compression='gzip', low_memory=False,
         usecols=['ICUSTAY_ID', 'STARTTIME', 'ITEMID']
@@ -157,7 +153,7 @@ def calculate_mechanical_ventilation():
     proc_events['selfextubated'] = proc_events['itemid'].apply(lambda x: 1 if x == 225468 else 0)
     vent_proc = proc_events[['icustay_id', 'charttime', 'mechvent', 'oxygentherapy', 'extubated', 'selfextubated']].drop_duplicates()
 
-    # Combine events and map to subjects via ICUSTAYS.
+    # Combine the two sets of ventilation signals and map them to subjects.
     ventilation_flags = pd.concat([vent_chartevents, vent_proc], ignore_index=True).drop_duplicates(subset=['icustay_id', 'charttime'])
     icu_stays_temp = pd.read_csv(
         'ICUSTAYS.csv.gz', compression='gzip',
@@ -177,18 +173,15 @@ def calculate_mechanical_ventilation():
     ].max(axis=1)
     return ventilation_flags_agg[['subject_id', 'hadm_id', 'mechanical_ventilation']]
 
+# Load and aggregate LABEVENTS into 2-hour bins for the first 24 hours.
 def load_and_aggregate_lab_data(file_path, bin_size=2):
-    """
-    Load LABEVENTS, filter to patients in our cohort, restrict to the first 24 hours
-    of ICU stay, and aggregate numeric lab features into bins (in hours) using mean aggregation.
-    """
     df = pd.read_csv(file_path, compression='gzip', low_memory=False)
     df.columns = df.columns.str.lower()
     if 'valuenum' not in df.columns:
         print("LABEVENTS missing 'valuenum' column.")
         return None
     df = df[df['valuenum'].notnull()]
-    # Read only needed columns from ICUSTAYS.
+    # Load ICU stay admission times.
     icu_stays_lab = pd.read_csv(
         'ICUSTAYS.csv.gz', compression='gzip',
         usecols=['SUBJECT_ID', 'HADM_ID', 'INTIME']
@@ -207,12 +200,9 @@ def load_and_aggregate_lab_data(file_path, bin_size=2):
     aggregated_df.columns = new_cols
     return aggregated_df
 
+# Load and aggregate additional feature data into 2-hour bins.
 def load_and_aggregate_feature_data(file_paths, table_name):
-    """
-    Load table(s), filter features to the first 24h (observation window), and aggregate in 2-hour bins.
-    """
     print(f"\nProcessing {table_name} from {file_paths}...")
-    
     # Load one or multiple files.
     if isinstance(file_paths, list):
         df_list = []
@@ -223,9 +213,8 @@ def load_and_aggregate_feature_data(file_paths, table_name):
     else:
         df = pd.read_csv(file_paths, compression='gzip', low_memory=False)
     
-    df.columns = df.columns.str.lower()  # Standardize column names.
+    df.columns = df.columns.str.lower()  
 
-    # Ensure 'subject_id' exists and filter for our cohort.
     if 'subject_id' not in df.columns:
         print(f"{table_name} is missing 'subject_id'. Skipping...")
         return None
@@ -241,6 +230,7 @@ def load_and_aggregate_feature_data(file_paths, table_name):
     df[timestamp_col] = pd.to_datetime(df[timestamp_col], errors='coerce')
     df.dropna(subset=[timestamp_col], inplace=True)
     
+    # Merge with ICU stays to restrict to first 24 hours.
     df = df.merge(icu_stays[['subject_id', 'hadm_id', 'intime']], on=['subject_id', 'hadm_id'], how='inner')
     df['hours_since_admission'] = (df[timestamp_col] - df['intime']).dt.total_seconds() / 3600
     df = df[df['hours_since_admission'].between(0, 24)]
@@ -250,31 +240,26 @@ def load_and_aggregate_feature_data(file_paths, table_name):
     
     print(f"{table_name}: After filtering features and time window - Shape: {df.shape}")
     
-    # Identify the numeric column to aggregate.
+    # Identify the numeric column.
     numeric_col = next((col for col in ['value', 'amount', 'valuenum'] if col in df.columns), None)
     if not numeric_col:
         print(f"{table_name} has no numeric column. Skipping...")
         return None
-    
     df[numeric_col] = pd.to_numeric(df[numeric_col], errors='coerce')
     
-    # Bin the data into 2-hour intervals (0-2, 2-4, ..., 22-24).
+    # Bin data into 2-hour intervals.
     df['hour_bin'] = (df['hours_since_admission'] // 2).astype(int)
-    
-    # Choose aggregation function: use 'sum' for events and 'mean' for others.
     agg_func = 'sum' if table_name in ['inputevents', 'outputevents'] else 'mean'
     aggregated_df = df.groupby(['subject_id', 'hadm_id', 'hour_bin', 'itemid'])[numeric_col].agg(agg_func).unstack().reset_index()
     
-    # Drop the hour_bin column.
     if 'hour_bin' in aggregated_df.columns:
         aggregated_df.drop(columns=['hour_bin'], inplace=True)
     
-    # Flatten column names: prefix each feature column with the table name.
     aggregated_df.columns = ['subject_id', 'hadm_id'] + [f"{table_name}_t{int(col)}" for col in aggregated_df.columns[2:]]
-    
     print(f"{table_name}: Final aggregated shape: {aggregated_df.shape}")
     return aggregated_df
 
+# Build the Base Structured Dataset
 admissions = pd.read_csv(
     'ADMISSIONS.csv.gz', compression='gzip', low_memory=False,
     usecols=['SUBJECT_ID', 'HADM_ID', 'ADMITTIME', 'DISCHTIME', 'DEATHTIME', 'ETHNICITY', 'INSURANCE']
@@ -288,14 +273,13 @@ icu_stays = pd.read_csv(
     usecols=['SUBJECT_ID', 'HADM_ID', 'ICUSTAY_ID', 'INTIME', 'OUTTIME']
 )
 
-# Convert datetime columns.
+# Convert date/time columns.
 admissions['ADMITTIME'] = pd.to_datetime(admissions['ADMITTIME'])
 admissions['DISCHTIME'] = pd.to_datetime(admissions['DISCHTIME'])
 admissions['DEATHTIME'] = pd.to_datetime(admissions['DEATHTIME'])
 icu_stays['INTIME'] = pd.to_datetime(icu_stays['INTIME'])
 icu_stays['OUTTIME'] = pd.to_datetime(icu_stays['OUTTIME'])
 
-# Rename columns for consistency.
 admissions.rename(columns={'SUBJECT_ID': 'subject_id', 'HADM_ID': 'hadm_id'}, inplace=True)
 patients.rename(columns={'SUBJECT_ID': 'subject_id'}, inplace=True)
 icu_stays.rename(columns={'SUBJECT_ID': 'subject_id', 'HADM_ID': 'hadm_id'}, inplace=True)
@@ -304,7 +288,7 @@ icu_stays.rename(columns={'SUBJECT_ID': 'subject_id', 'HADM_ID': 'hadm_id'}, inp
 df_struct = pd.merge(icu_stays, admissions, on=['subject_id', 'hadm_id'], how='left')
 df_struct = pd.merge(df_struct, patients, on='subject_id', how='left')
 
-# Process DOB and compute age at ICU admission.
+# Compute age and assign age bucket.
 df_struct['DOB'] = pd.to_datetime(df_struct['DOB'], errors='coerce')
 df_struct['age'] = df_struct.apply(lambda row: calculate_age(row['DOB'], row['INTIME'])
                                    if pd.notnull(row['DOB']) and pd.notnull(row['INTIME']) else np.nan, axis=1)
@@ -319,7 +303,7 @@ df_struct['gender'] = df_struct['GENDER'].str.lower().apply(lambda x: 'male' if 
 # Calculate short-term mortality.
 df_struct = calculate_short_term_mortality(df_struct)
 
-# Calculate ICU length of stay (in hours) and restrict to stays < 72 hours.
+# Compute continuous ICU LOS (in hours) and filter for stays shorter than 72 hours.
 df_struct['icu_los'] = (df_struct['OUTTIME'] - df_struct['INTIME']).dt.total_seconds() / 3600
 df_struct = df_struct[df_struct['icu_los'] < 72]
 
@@ -328,27 +312,22 @@ vent_flags = calculate_mechanical_ventilation()
 df_struct = pd.merge(df_struct, vent_flags, on=['subject_id', 'hadm_id'], how='left')
 df_struct['mechanical_ventilation'] = df_struct['mechanical_ventilation'].fillna(0).astype(int)
 
-# Aggregate lab features (from LABEVENTS) in 2-hour bins over the first 24 hours.
+# Aggregate LABEVENTS features into 2-hour bins over the first 24 hours.
 lab_aggregated = load_and_aggregate_lab_data('LABEVENTS.csv.gz', bin_size=2)
 if lab_aggregated is not None:
     df_struct = pd.merge(df_struct, lab_aggregated, on=['subject_id', 'hadm_id'], how='left')
 
-# Keep only the first ICU stay per subject.
 df_struct = df_struct.sort_values(by='INTIME').groupby('subject_id').first().reset_index()
 
-# Save the base structured dataset.
 df_struct.to_csv('final_structured_dataset.csv', index=False)
 print("Base structured dataset saved as 'final_structured_dataset.csv'.")
 
 # Merge Feature Set C (2-hour bins) into the Structured Dataset
-
-# For feature extraction, we use a filtered version of the structured dataset.
-# Here we assume 'filtered_structured_first_icu_stays.csv' contains your cohort.
 structured_df = pd.read_csv('filtered_structured_first_icu_stays.csv')
 filtered_subjects = set(structured_df['subject_id'].unique()) 
 print(f"Filtered structured dataset shape: {structured_df.shape}")
 
-# Load ICU stays data (for admission times) used for feature extraction.
+# Load ICU stays data (used for feature extraction) and filter for stays longer than 30 hours.
 icu_stays = pd.read_csv('ICUSTAYS.csv.gz', compression='gzip', usecols=['SUBJECT_ID', 'HADM_ID', 'INTIME', 'OUTTIME'])
 icu_stays.columns = icu_stays.columns.str.lower()
 icu_stays['intime'] = pd.to_datetime(icu_stays['intime'])
@@ -358,7 +337,7 @@ icu_stays = icu_stays[icu_stays['subject_id'].isin(filtered_subjects)]
 icu_stays = icu_stays[icu_stays['icu_los'] >= 30]
 print(f"ICU stays shape after filtering by subject_id and LOS>=30h: {icu_stays.shape}")
 
-# Define Feature Set C items.
+# Define the set of features to extract for each table.
 feature_set_C_items = {
     'chartevents': [220051, 220052, 618, 220210, 224641, 220292, 535, 224695, 506, 220339, 448, 224687, 224685, 220293, 444, 224697, 220074, 224688, 223834, 50815, 225664, 220059, 683, 224684, 220060, 226253, 224161, 642, 225185, 226758, 226757, 226756, 220050, 211, 220045, 223761, 223835, 226873, 226871, 8364, 8555, 8368, 53, 646, 1529, 50809, 50931, 51478, 224639, 763, 224639, 226707],
     'labevents': [51221, 51480, 51265, 50811, 51222, 51249, 51248, 51250, 51279, 51277, 50902, 50868, 50912, 50809, 50931, 51478, 50960, 50893, 50970, 51237, 51274, 51275, 51375, 51427, 51446, 51116, 51244, 51355, 51379, 51120, 51254, 51256, 51367, 51387, 51442, 51112, 51146, 51345, 51347, 51368, 51419, 51444, 51114, 51200, 51474, 50820, 50831, 51094, 51491, 50802, 50804, 50818, 51498, 50813, 50861, 50878, 50863, 50862, 490, 1165, 50902, 50819],
@@ -367,7 +346,7 @@ feature_set_C_items = {
     'prescriptions': ['Docusate Sodium', 'Aspirin', 'Bisacodyl', 'Humulin-R Insulin', 'Metoprolol', 'Pantoprazole Sodium', 'Pantoprazole']
 }
 
-# Define input files mapping.
+# Define input files mapping for each table.
 input_files = {
     'chartevents': 'CHARTEVENTS.csv.gz',
     'labevents': 'LABEVENTS.csv.gz',
@@ -376,38 +355,31 @@ input_files = {
     'prescriptions': 'PRESCRIPTIONS.csv.gz'
 }
 
-# Process each table from Feature Set C (with 2-hour bins).
 aggregated_features = {}
 for table, file in input_files.items():
     aggregated_features[table] = load_and_aggregate_feature_data(file, table)
 
-# Merge aggregated features with the filtered structured dataset.
+# Merge these aggregated features with the filtered structured dataset.
 merged_features = structured_df.copy()
 for table_name, feature_df in aggregated_features.items():
     if feature_df is not None:
         merged_features = merged_features.merge(feature_df, on=['subject_id', 'hadm_id'], how='left')
 
-# If multiple rows per subject remain, aggregate so that there is one row per subject.
+if 'icu_los' not in merged_features.columns:
+    if 'icu_los' in structured_df.columns:
+        merged_features = merged_features.merge(structured_df[['subject_id', 'icu_los']], on='subject_id', how='left')
+
 numeric_cols = merged_features.select_dtypes(include=[np.number]).columns
 categorical_cols = merged_features.select_dtypes(exclude=[np.number]).columns
 merged_features_numeric = merged_features.groupby('subject_id', as_index=False)[numeric_cols].mean()
 merged_features_categorical = merged_features.groupby('subject_id', as_index=False)[categorical_cols].first()
 merged_features = merged_features_numeric.merge(merged_features_categorical, on='subject_id', how='left')
 
-# Save the final structured dataset with Feature Set C.
 output_file = 'final_structured_with_feature_set_C_24h_2h_bins.csv'
 merged_features.to_csv(output_file, index=False)
 print(f"\nFinal dataset saved as {output_file}")
 
 print(f"\nFinal Dataset Shape: {merged_features.shape}")
 print(f"Short-Term Mortality Count: {merged_features['short_term_mortality'].sum()}")
-if 'readmission_within_30_days' in merged_features.columns:
-    print(f"Readmission Count: {merged_features['readmission_within_30_days'].sum()}")
-
-unstructured_df = pd.read_csv('filtered_unstructured.csv', low_memory=False)
-print(f"Unstructured dataset shape: {unstructured_df.shape}")
-common_subjects = set(merged_features['subject_id']).intersection(set(unstructured_df['subject_id']))
-print(f"Number of common subject IDs: {len(common_subjects)}")
-filtered_structured = merged_features[merged_features['subject_id'].isin(common_subjects)]
-filtered_structured.to_csv('filtered_structured_output.csv', index=False)
-print("Filtered structured dataset saved as 'filtered_structured_output.csv'.")
+print(f"Average ICU LOS: {merged_features['icu_los'].mean()}")
+print(f"Mechanical Ventilation Count: {merged_features['mechanical_ventilation'].sum()}")
