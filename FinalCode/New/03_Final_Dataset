@@ -1,0 +1,44 @@
+import pandas as pd
+
+# Load final structured dataset 
+structured_file = 'final_structured_with_feature_set_C_24h_2h_bins.csv'
+structured_df = pd.read_csv(structured_file)
+print("Final Structured Dataset:")
+print("Shape:", structured_df.shape)
+print("Columns:", structured_df.columns.tolist())
+print("Short-Term Mortality (positive count):", structured_df['short_term_mortality'].sum())
+print("Binary LOS (positive count):", structured_df['los_binary'].sum())
+print("Mechanical Ventilation (positive count):", structured_df['mechanical_ventilation'].sum())
+print("\n")
+
+# Load final unstructured dataset 
+unstructured_file = 'unstructured_with_demographics.csv'
+unstructured_df = pd.read_csv(unstructured_file)
+print("Final Unstructured Dataset:")
+print("Shape:", unstructured_df.shape)
+print("Columns:", unstructured_df.columns.tolist())
+print("Short-Term Mortality (positive count):", unstructured_df['short_term_mortality'].sum())
+print("Binary LOS (positive count):", unstructured_df['los_binary'].sum())
+print("Mechanical Ventilation (positive count):", unstructured_df['mechanical_ventilation'].sum())
+print("\n")
+
+# Identify common subject IDs between the two datasets.
+common_ids = set(structured_df['subject_id'].unique()).intersection(set(unstructured_df['subject_id'].unique()))
+print("Number of common subject IDs:", len(common_ids))
+
+# Filter both datasets to include only rows with common subject IDs.
+structured_common = structured_df[structured_df['subject_id'].isin(common_ids)].copy()
+unstructured_common = unstructured_df[unstructured_df['subject_id'].isin(common_ids)].copy()
+
+# Save the final datasets with common subject IDs.
+structured_common.to_csv('final_structured_common.csv', index=False)
+unstructured_common.to_csv('final_unstructured_common.csv', index=False)
+
+print("Final Structured (Common IDs) Shape:", structured_common.shape)
+print("Final Unstructured (Common IDs) Shape:", unstructured_common.shape)
+print("Structured - Short-Term Mortality Count:", structured_common['short_term_mortality'].sum())
+print("Structured - Binary LOS Count:", structured_common['los_binary'].sum())
+print("Structured - Mechanical Ventilation Count:", structured_common['mechanical_ventilation'].sum())
+print("Unstructured - Short-Term Mortality Count:", unstructured_common['short_term_mortality'].sum())
+print("Unstructured - Binary LOS Count:", unstructured_common['los_binary'].sum())
+print("Unstructured - Mechanical Ventilation Count:", unstructured_common['mechanical_ventilation'].sum())
