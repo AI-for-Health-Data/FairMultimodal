@@ -238,7 +238,7 @@ def train_pipeline():
     print("Using device:", device)
 
     # Read the unstructured dataset.
-    df = pd.read_csv("filtered_unstructured.csv", low_memory=False)
+    df = pd.read_csv("final_unstructured_common.csv", low_memory=False)
     print("Data shape:", df.shape)
     
     # Identify note columns (e.g., columns starting with 'note_')
