@@ -60,6 +60,26 @@ def get_pos_weight(labels_series, device, clip_max=10.0):
         print("Positive weight:", weight.item())
     return weight
 
+def get_age_bucket(age):
+    if 15 <= age <= 29:
+        return "15-29"
+    elif 30 <= age <= 49:
+        return "30-49"
+    elif 50 <= age <= 69:
+        return "50-69"
+    elif 70 <= age <= 90:
+        return "70-90"
+    else:
+        return "Other"
+
+def map_ethnicity(e):
+    mapping = {0: "White", 1: "Black", 2: "Hispanic", 3: "Asian"}
+    return mapping.get(e, "Other")
+
+def map_insurance(i):
+    mapping = {0: "Government", 1: "Medicare", 2: "Medicaid", 3: "Private", 4: "Self Pay"}
+    return mapping.get(i, "Other")
+
 
 # BioClinicalBERT Fine-Tuning and Text Aggregation
 class BioClinicalBERT_FT(nn.Module):
@@ -119,6 +139,7 @@ def apply_bioclinicalbert_on_patient_notes(df, note_columns, tokenizer, model, d
 
 
 # BEHRT Models for Structured Data
+
 class BEHRTModel_Demo(nn.Module):
     def __init__(self, num_ages, num_genders, num_ethnicities, num_insurances, hidden_size=768):
         """
@@ -182,7 +203,9 @@ class BEHRTModel_Lab(nn.Module):
         lab_embedding = x.mean(dim=1)
         return lab_embedding
 
-# Multimodal Transformer: Fusion for Three Outcomes
+
+# Multimodal Transformer
+
 class MultimodalTransformer(nn.Module):
     def __init__(self, text_embed_size, behrt_demo, behrt_lab, device):
         super(MultimodalTransformer, self).__init__()
@@ -190,6 +213,7 @@ class MultimodalTransformer(nn.Module):
         self.behrt_lab = behrt_lab
         self.device = device
 
+        # Separate projection networks for each outcome
         # Mortality projections
         self.demo_projector_mort = nn.Sequential(
             nn.Linear(behrt_demo.bert.config.hidden_size, 256),
@@ -269,6 +293,9 @@ class MultimodalTransformer(nn.Module):
         mechvent_logit = self._compute_logit(demo_proj_mech, lab_proj_mech, text_proj_mech, beta)
 
         return mortality_logit, los_logit, mechvent_logit
+
+
+# Training and Evaluation Functions
 
 def train_step(model, dataloader, optimizer, device, 
                criterion_mort, criterion_los, criterion_mech,
@@ -392,14 +419,17 @@ def evaluate_model(model, dataloader, device, threshold=0.5, print_eddi=False):
         metrics[task] = {"aucroc": aucroc, "auprc": auprc, "f1": f1,
                          "recall": recall, "precision": precision}
     
-    # For EDDI analysis, use sensitive attribute codes 
+    # For EDDI analysis, use sensitive attribute codes
+    # Here, age_ids correspond to bucket codes, so we convert them to bucket labels.
     ages = torch.cat(all_age, dim=0).numpy().squeeze()
-    ethnicities = torch.cat(all_ethnicity, dim=0).numpy().squeeze()
-    insurances = torch.cat(all_insurance, dim=0).numpy().squeeze()
+    ethnicity_vals = torch.cat(all_ethnicity, dim=0).numpy().squeeze()
+    insurance_vals = torch.cat(all_insurance, dim=0).numpy().squeeze()
     
-    age_groups = np.array([str(a) for a in ages])
-    ethnicity_groups = np.array([str(e) for e in ethnicities])
-    insurance_groups = np.array([str(i) for i in insurances])
+    # Define the ordered age buckets.
+    age_order = ["15-29", "30-49", "50-69", "70-90", "Other"]
+    age_groups = np.array([age_order[int(a)] for a in ages])
+    ethnicity_groups = np.array([str(e) for e in ethnicity_vals])
+    insurance_groups = np.array([str(i) for i in insurance_vals])
     
     eddi_stats = {}
     for task, probs, labels in zip(["mortality", "los", "mechanical_ventilation"],
@@ -436,6 +466,7 @@ def train_pipeline():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("Using device:", device)
 
+    # Load merged datasets (Structured and Unstructured)
     structured_data = pd.read_csv("final_structured_common.csv")
     unstructured_data = pd.read_csv("final_unstructured_common.csv", low_memory=False)
     print("\n--- Debug Info: Before Merge ---")
@@ -471,6 +502,16 @@ def train_pipeline():
         return False
     df_filtered = merged_df[merged_df.apply(has_valid_note, axis=1)].copy()
     print("After filtering, number of rows:", len(df_filtered))
+
+    # Create age buckets from the 'age' column.
+    if "age" not in df_filtered.columns:
+        print("Column 'age' not found; creating default age=0 for all samples.")
+        df_filtered["age"] = 0
+    # Apply bucket function and order the categories.
+    age_categories = ["15-29", "30-49", "50-69", "70-90", "Other"]
+    df_filtered["age_bucket"] = df_filtered["age"].apply(get_age_bucket)
+    df_filtered["age_bucket"] = pd.Categorical(df_filtered["age_bucket"], categories=age_categories, ordered=True)
+    df_filtered["age_bucket_code"] = df_filtered["age_bucket"].cat.codes
 
     # Compute Aggregated Text Embeddings (Text Branch)
     tokenizer = AutoTokenizer.from_pretrained("emilyalsentzer/Bio_ClinicalBERT")
@@ -576,7 +617,7 @@ def train_pipeline():
 
     max_epochs = 20
     patience_limit = 5  
-    beta = 0.3  
+    beta = 0.5  
     loss_gamma = 1
 
     best_loss = float('inf')
