@@ -30,10 +30,8 @@ class FocalLoss(nn.Module):
         )
         pt = torch.exp(-bce_loss)
         focal_loss = ((1 - pt) ** self.gamma) * bce_loss
-
         if self.alpha is not None:
             focal_loss = self.alpha * focal_loss
-
         if self.reduction == 'mean':
             return focal_loss.mean()
         elif self.reduction == 'sum':
@@ -60,6 +58,7 @@ def get_pos_weight(labels_series, device, clip_max=10.0):
         weight = torch.tensor(w, dtype=torch.float, device=device)
     print("Positive weight:", weight.item())
     return weight
+
 
 # BioClinicalBERT Fine-Tuning Wrapper
 class BioClinicalBERT_FT(nn.Module):
@@ -106,10 +105,11 @@ def apply_bioclinicalbert_on_patient_notes(df, note_columns, tokenizer, model, d
                     emb = model(input_ids, attn_mask)
                 embeddings.append(emb.cpu().numpy())
             embeddings = np.vstack(embeddings)
-            agg_emb = np.mean(embeddings, axis=0) if aggregation == "mean" else np.max(embeddings, axis=0)
+            agg_emb = np.mean(embeddings, axis=0) if aggregation=="mean" else np.max(embeddings, axis=0)
             aggregated_embeddings.append(agg_emb)
     aggregated_embeddings = np.vstack(aggregated_embeddings)
     return aggregated_embeddings, patient_ids
+
 
 # Unstructured Dataset Definition
 class UnstructuredDataset(Dataset):
@@ -129,11 +129,12 @@ class UnstructuredDataset(Dataset):
     def __getitem__(self, idx):
         return self.embeddings[idx], self.mortality_labels[idx], self.los_labels[idx], self.mech_labels[idx]
 
+
 # Unstructured Classifier Definition
 class UnstructuredClassifier(nn.Module):
     def __init__(self, input_size=768, hidden_size=256):
         super(UnstructuredClassifier, self).__init__()
-        # Now output 3 logits: mortality, los, mechanical ventilation.
+        # Output 3 logits: mortality, los, mechanical ventilation.
         self.classifier = nn.Sequential(
             nn.Linear(input_size, hidden_size),
             nn.ReLU(),
@@ -144,6 +145,7 @@ class UnstructuredClassifier(nn.Module):
     def forward(self, x):
         logits = self.classifier(x)
         return logits
+
 
 # Training and Evaluation Functions
 def train_model(model, dataloader, optimizer, device, criterion_mort, criterion_los, criterion_mech):
@@ -226,17 +228,57 @@ def assign_age_bucket(age):
     else:
         return 'other'
 
-def compute_eddi(df, sensitive_attr, true_label_col, pred_label_col):
-    groups = df.groupby(sensitive_attr)
-    overall_error = np.mean(df[true_label_col] != df[pred_label_col])
-    eddi_sum = 0.0
-    num_groups = 0
-    for group_name, group_df in groups:
-        group_error = np.mean(group_df[true_label_col] != group_df[pred_label_col])
-        eddi_sum += abs(group_error - overall_error) / max(overall_error, 1 - overall_error)
-        num_groups += 1
-    eddi = eddi_sum / num_groups if num_groups > 0 else 0.0
-    return eddi
+# compute_eddi as provided
+def compute_eddi(y_true, y_pred, sensitive_labels):
+    """
+    Computes the Error Distribution Disparity Index (EDDI) for one outcome.
+    For each subgroup s, compute the subgroup error rate (ER_s) and overall error rate (OER).
+    Then, for each subgroup, disparity = (ER_s - OER) / max(OER, 1 - OER).
+    Finally, attribute-level EDDI is computed as:
+      eddi_attr = sqrt(sum(EDDI_s^2) / num_subgroups)
+    """
+    unique_groups = np.unique(sensitive_labels)
+    subgroup_eddi = {}
+    overall_error = np.mean(y_pred != y_true)
+    denom = max(overall_error, 1 - overall_error) if overall_error not in [0, 1] else 1.0
+    for group in unique_groups:
+        mask = (sensitive_labels == group)
+        if np.sum(mask) == 0:
+            subgroup_eddi[group] = np.nan
+        else:
+            er_group = np.mean(y_pred[mask] != y_true[mask])
+            subgroup_eddi[group] = (er_group - overall_error) / denom
+    eddi_attr = np.sqrt(np.sum(np.array(list(subgroup_eddi.values())) ** 2)) / len(unique_groups)
+    return eddi_attr, subgroup_eddi
+
+
+# Detailed EDDI Printing Function
+def print_detailed_eddi(y_true, y_pred, outcome_name, df_results, age_order, ethnicity_order, insurance_order):
+    print(f"\n--- Detailed EDDI for {outcome_name} Outcome ---")
+    overall_age, age_sub = compute_eddi(y_true, y_pred, df_results['age_bucket'].values)
+    overall_eth, eth_sub = compute_eddi(y_true, y_pred, df_results['ethnicity_category'].values)
+    overall_ins, ins_sub = compute_eddi(y_true, y_pred, df_results['insurance_category'].values)
+    
+    print("Age Buckets EDDI (per subgroup):")
+    for bucket in age_order:
+        print(f"  {bucket}: {age_sub.get(bucket, np.nan):.4f}")
+    print("Overall Age EDDI (sqrt(sum(EDDI^2)/n)):", overall_age)
+    
+    print("Ethnicity Groups EDDI (per subgroup):")
+    for group in ethnicity_order:
+        print(f"  {group}: {eth_sub.get(group, np.nan):.4f}")
+    print("Overall Ethnicity EDDI (sqrt(sum(EDDI^2)/n)):", overall_eth)
+    
+    print("Insurance Groups EDDI (per subgroup):")
+    for group in insurance_order:
+        print(f"  {group}: {ins_sub.get(group, np.nan):.4f}")
+    print("Overall Insurance EDDI (sqrt(sum(EDDI^2)/n)):", overall_ins)
+    
+    # Compute final overall EDDI using the specified formula.
+    total_eddi = np.sqrt((overall_age**2 + overall_eth**2 + overall_ins**2)) / 3
+    print(f"Final Overall {outcome_name} EDDI: {total_eddi:.4f}")
+    return total_eddi, {"age": age_sub, "ethnicity": eth_sub, "insurance": ins_sub}
+
 
 # Main Training and Evaluation Pipeline
 def train_pipeline():
@@ -247,7 +289,7 @@ def train_pipeline():
     df = pd.read_csv("final_unstructured_common.csv", low_memory=False)
     print("Data shape:", df.shape)
     
-    # Identify note columns (e.g., columns starting with 'note_').
+    # Identify note columns (columns starting with 'note_').
     note_columns = [col for col in df.columns if col.startswith("note_")]
     print("Note columns found:", note_columns)
     
@@ -275,7 +317,7 @@ def train_pipeline():
     # Use unique patients for labels and demographics.
     df_unique = df_filtered.drop_duplicates(subset="subject_id")
     
-    # "short_term_mortality", "los_binary", and "mechanical_ventilation"
+    # Outcome labels.
     mortality_labels = df_unique["short_term_mortality"].values
     los_labels = df_unique["los_binary"].values
     mech_labels = df_unique["mechanical_ventilation"].values
@@ -314,11 +356,10 @@ def train_pipeline():
     # Inference and Fairness Evaluation for All Three Tasks.
     probs = get_patient_probabilities(classifier, dataloader, device)
     
-    # Build a results dataframe by merging predictions with demographics.
+    # Build results dataframe by merging predictions with demographics.
     demo_cols = ['subject_id', 'age', 'ethnicity_category', 'insurance_category']
     df_demo = df_unique[demo_cols].copy()
     
-    # Create predictions dataframe (assuming patient_ids order corresponds to aggregated embeddings).
     df_probs = pd.DataFrame({
         'subject_id': patient_ids,
         'mortality_prob': probs[:, 0],
@@ -326,16 +367,28 @@ def train_pipeline():
         'mech_prob': probs[:, 2]
     })
     
-    # Merge demographics with prediction probabilities.
     df_results = pd.merge(df_demo, df_probs, on='subject_id', how='inner')
     
-    # Compute binary predictions using threshold = 0.5.
-    threshold = 0.5
-    df_results['mortality_pred'] = (df_results['mortality_prob'] >= threshold).astype(int)
-    df_results['los_pred'] = (df_results['los_prob'] >= threshold).astype(int)
-    df_results['mech_pred'] = (df_results['mech_prob'] >= threshold).astype(int)
+    df_results["ethnicity_category"] = df_results["ethnicity_category"].str.lower().fillna("others")
+    df_results["ethnicity_category"] = df_results["ethnicity_category"].apply(
+        lambda x: x if x in ["white", "black", "hispanic", "asian"] else "others"
+    )
     
-    # Merge true labels for all tasks.
+    df_results["insurance_category"] = df_results["insurance_category"].str.lower().fillna("others")
+    df_results["insurance_category"] = df_results["insurance_category"].apply(
+        lambda x: x if x in ["government", "medicare", "medicaid", "private", "self pay"] else "others"
+    )
+    
+    # Update fixed subgroup orders accordingly.
+    age_order = ["15-29", "30-49", "50-69", "70-89", "other"]
+    ethnicity_order = ["white", "black", "hispanic", "asian", "others"]
+    insurance_order = ["government", "medicare", "medicaid", "private", "self pay", "others"]
+    
+    # Add ground truth labels.
+    df_results['mortality_pred'] = (df_results['mortality_prob'] >= 0.5).astype(int)
+    df_results['los_pred'] = (df_results['los_prob'] >= 0.5).astype(int)
+    df_results['mech_pred'] = (df_results['mech_prob'] >= 0.5).astype(int)
+    
     df_results = pd.merge(df_results,
                           df_unique[['subject_id', 'short_term_mortality', 'los_binary', 'mechanical_ventilation']],
                           on='subject_id', how='inner')
@@ -348,52 +401,27 @@ def train_pipeline():
     # Create age buckets for fairness evaluation.
     df_results['age_bucket'] = df_results['age'].apply(assign_age_bucket)
     
-    # Fairness Evaluation for Mortality.
-    eddi_ethnicity_mort = compute_eddi(df_results, sensitive_attr='ethnicity_category',
-                                       true_label_col='mortality_true', pred_label_col='mortality_pred')
-    eddi_age_mort = compute_eddi(df_results, sensitive_attr='age_bucket',
-                                 true_label_col='mortality_true', pred_label_col='mortality_pred')
-    eddi_insurance_mort = compute_eddi(df_results, sensitive_attr='insurance_category',
-                                       true_label_col='mortality_true', pred_label_col='mortality_pred')
-    overall_eddi_mort = np.mean([eddi_ethnicity_mort, eddi_age_mort, eddi_insurance_mort])
+    # For each outcome, compute and print detailed EDDI values.
+    y_true_mort = df_results["mortality_true"].values.astype(int)
+    y_pred_mort = df_results["mortality_pred"].values.astype(int)
+    y_true_los = df_results["los_true"].values.astype(int)
+    y_pred_los = df_results["los_pred"].values.astype(int)
+    y_true_mech = df_results["mech_true"].values.astype(int)
+    y_pred_mech = df_results["mech_pred"].values.astype(int)
     
-    print("\nFairness Evaluation (Mortality Task):")
-    print("EDDI for Ethnicity:", eddi_ethnicity_mort)
-    print("EDDI for Age Bucket:", eddi_age_mort)
-    print("EDDI for Insurance:", eddi_insurance_mort)
-    print("Overall EDDI (Mortality):", overall_eddi_mort)
+    print("\nCalculating detailed fairness metrics (EDDI):")
+    eddi_mort, details_mort = print_detailed_eddi(y_true_mort, y_pred_mort, "Mortality", df_results, age_order, ethnicity_order, insurance_order)
+    eddi_los, details_los = print_detailed_eddi(y_true_los, y_pred_los, "LOS", df_results, age_order, ethnicity_order, insurance_order)
+    eddi_mech, details_mech = print_detailed_eddi(y_true_mech, y_pred_mech, "Mechanical Ventilation", df_results, age_order, ethnicity_order, insurance_order)
     
-    # Fairness Evaluation for LOS.
-    eddi_ethnicity_los = compute_eddi(df_results, sensitive_attr='ethnicity_category',
-                                      true_label_col='los_true', pred_label_col='los_pred')
-    eddi_age_los = compute_eddi(df_results, sensitive_attr='age_bucket',
-                                true_label_col='los_true', pred_label_col='los_pred')
-    eddi_insurance_los = compute_eddi(df_results, sensitive_attr='insurance_category',
-                                      true_label_col='los_true', pred_label_col='los_pred')
-    overall_eddi_los = np.mean([eddi_ethnicity_los, eddi_age_los, eddi_insurance_los])
-    
-    print("\nFairness Evaluation (LOS Task):")
-    print("EDDI for Ethnicity:", eddi_ethnicity_los)
-    print("EDDI for Age Bucket:", eddi_age_los)
-    print("EDDI for Insurance:", eddi_insurance_los)
-    print("Overall EDDI (LOS):", overall_eddi_los)
-    
-    # Fairness Evaluation for Mechanical Ventilation.
-    eddi_ethnicity_mech = compute_eddi(df_results, sensitive_attr='ethnicity_category',
-                                       true_label_col='mech_true', pred_label_col='mech_pred')
-    eddi_age_mech = compute_eddi(df_results, sensitive_attr='age_bucket',
-                                 true_label_col='mech_true', pred_label_col='mech_pred')
-    eddi_insurance_mech = compute_eddi(df_results, sensitive_attr='insurance_category',
-                                       true_label_col='mech_true', pred_label_col='mech_pred')
-    overall_eddi_mech = np.mean([eddi_ethnicity_mech, eddi_age_mech, eddi_insurance_mech])
-    
-    print("\nFairness Evaluation (Mechanical Ventilation Task):")
-    print("EDDI for Ethnicity:", eddi_ethnicity_mech)
-    print("EDDI for Age Bucket:", eddi_age_mech)
-    print("EDDI for Insurance:", eddi_insurance_mech)
-    print("Overall EDDI (Mechanical Ventilation):", overall_eddi_mech)
-    
-    # Optionally, save results to CSV.
+    eddi_all = {
+        "mortality": {"overall_EDDI": eddi_mort, "subgroup_EDDI": details_mort},
+        "los": {"overall_EDDI": eddi_los, "subgroup_EDDI": details_los},
+        "mechanical_ventilation": {"overall_EDDI": eddi_mech, "subgroup_EDDI": details_mech}
+    }
+    print("\nAll EDDI Results:")
+    for outcome, stats in eddi_all.items():
+        print(f"{outcome.capitalize()} Overall EDDI: {stats['overall_EDDI']:.4f}")
     df_results.to_csv("unstructured_predictions_and_fairness.csv", index=False)
     print("Results saved to 'unstructured_predictions_and_fairness.csv'.")
 
