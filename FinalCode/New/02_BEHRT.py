@@ -570,14 +570,35 @@ def print_subgroup_eddi(true, pred, sensitive_name, sensitive_values):
     print(f"Attribute-level EDDI for {sensitive_name}: {attribute_eddi:.4f}\n")
     return subgroup_disparities, attribute_eddi
 
+# For Mortality (already computed above), we have:
 print("=== EDDI for Age Groups (Mortality) ===")
-age_subgroups, age_eddi = print_subgroup_eddi(labels_arr[:, 0], preds_mort, "Age Groups", age_groups)
-
+age_subgroups_mort, age_eddi_mort = print_subgroup_eddi(labels_arr[:, 0], preds_mort, "Age Groups", age_groups)
 print("=== EDDI for Ethnicity Groups (Mortality) ===")
-ethnicity_subgroups, ethnicity_eddi = print_subgroup_eddi(labels_arr[:, 0], preds_mort, "Ethnicity Groups", ethnicity_groups)
-
+ethnicity_subgroups_mort, ethnicity_eddi_mort = print_subgroup_eddi(labels_arr[:, 0], preds_mort, "Ethnicity Groups", ethnicity_groups)
 print("=== EDDI for Insurance Groups (Mortality) ===")
-insurance_subgroups, insurance_eddi = print_subgroup_eddi(labels_arr[:, 0], preds_mort, "Insurance Groups", insurance_groups)
+insurance_subgroups_mort, insurance_eddi_mort = print_subgroup_eddi(labels_arr[:, 0], preds_mort, "Insurance Groups", insurance_groups)
+overall_eddi_mort = np.sqrt(age_eddi_mort**2 + ethnicity_eddi_mort**2 + insurance_eddi_mort**2) / 3
+print(f"\nOverall EDDI for Mortality Predictions: {overall_eddi_mort:.4f}\n")
+
+# For LOS outcome:
+print("=== EDDI for Age Groups (LOS) ===")
+age_subgroups_los, age_eddi_los = print_subgroup_eddi(labels_arr[:, 1], preds_los, "Age Groups", age_groups)
+print("=== EDDI for Ethnicity Groups (LOS) ===")
+ethnicity_subgroups_los, ethnicity_eddi_los = print_subgroup_eddi(labels_arr[:, 1], preds_los, "Ethnicity Groups", ethnicity_groups)
+print("=== EDDI for Insurance Groups (LOS) ===")
+insurance_subgroups_los, insurance_eddi_los = print_subgroup_eddi(labels_arr[:, 1], preds_los, "Insurance Groups", insurance_groups)
+overall_eddi_los = np.sqrt(age_eddi_los**2 + ethnicity_eddi_los**2 + insurance_eddi_los**2) / 3
+print(f"\nOverall EDDI for LOS Predictions: {overall_eddi_los:.4f}\n")
+
+# For Mechanical Ventilation outcome:
+print("=== EDDI for Age Groups (Mechanical Ventilation) ===")
+age_subgroups_mech, age_eddi_mech = print_subgroup_eddi(labels_arr[:, 2], preds_mech, "Age Groups", age_groups)
+print("=== EDDI for Ethnicity Groups (Mechanical Ventilation) ===")
+ethnicity_subgroups_mech, ethnicity_eddi_mech = print_subgroup_eddi(labels_arr[:, 2], preds_mech, "Ethnicity Groups", ethnicity_groups)
+print("=== EDDI for Insurance Groups (Mechanical Ventilation) ===")
+insurance_subgroups_mech, insurance_eddi_mech = print_subgroup_eddi(labels_arr[:, 2], preds_mech, "Insurance Groups", insurance_groups)
+overall_eddi_mech = np.sqrt(age_eddi_mech**2 + ethnicity_eddi_mech**2 + insurance_eddi_mech**2) / 3
+print(f"\nOverall EDDI for Mechanical Ventilation Predictions: {overall_eddi_mech:.4f}\n")
 
 # Detailed EDDI for each age group.
 age_group_list = ['15-29', '30-49', '50-69', '70-89']
