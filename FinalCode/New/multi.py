@@ -460,7 +460,7 @@ def train_pipeline():
 
     # Load merged datasets (as created by your pre-processing pipeline)
     structured_data = pd.read_csv('final_structured_common.csv')
-    unstructured_data = pd.read_csv("unstructured_with_demographics.csv", low_memory=False)
+    unstructured_data = pd.read_csv("final_unstructured_common.csv", low_memory=False)
     print("\n--- Debug Info: Before Merge ---")
     print("Structured data shape:", structured_data.shape)
     print("Unstructured data shape:", unstructured_data.shape)
