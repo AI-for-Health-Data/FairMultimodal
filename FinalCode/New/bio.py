@@ -16,9 +16,6 @@ from transformers import AutoTokenizer, AutoModel
 from sklearn.metrics import roc_auc_score, average_precision_score, f1_score, recall_score, precision_score, confusion_matrix
 from scipy.special import expit  # for logistic sigmoid
 
-#############################################
-# Focal Loss Definition
-#############################################
 class FocalLoss(nn.Module):
     def __init__(self, gamma=2, alpha=None, reduction='mean', pos_weight=None):
         super(FocalLoss, self).__init__()
@@ -44,9 +41,8 @@ class FocalLoss(nn.Module):
         else:
             return focal_loss
 
-#############################################
+
 # Utility Functions for Class Weights
-#############################################
 def compute_class_weights(df, label_column):
     class_counts = df[label_column].value_counts().sort_index()
     total_samples = len(df)
@@ -65,9 +61,7 @@ def get_pos_weight(labels_series, device, clip_max=10.0):
     print("Positive weight:", weight.item())
     return weight
 
-#############################################
 # BioClinicalBERT Fine-Tuning Wrapper
-#############################################
 class BioClinicalBERT_FT(nn.Module):
     def __init__(self, base_model, config, device):
         super(BioClinicalBERT_FT, self).__init__()
@@ -80,9 +74,8 @@ class BioClinicalBERT_FT(nn.Module):
         cls_embedding = outputs.last_hidden_state[:, 0, :]
         return cls_embedding
 
-#############################################
+
 # Apply BioClinicalBERT on Patient Notes
-#############################################
 def apply_bioclinicalbert_on_patient_notes(df, note_columns, tokenizer, model, device, aggregation="mean", max_length=128):
     patient_ids = df["subject_id"].unique()
     aggregated_embeddings = []
@@ -118,9 +111,7 @@ def apply_bioclinicalbert_on_patient_notes(df, note_columns, tokenizer, model, d
     aggregated_embeddings = np.vstack(aggregated_embeddings)
     return aggregated_embeddings, patient_ids
 
-#############################################
 # Unstructured Dataset Definition
-#############################################
 class UnstructuredDataset(Dataset):
     def __init__(self, embeddings, mortality_labels, los_labels, mech_labels):
         """
@@ -138,9 +129,7 @@ class UnstructuredDataset(Dataset):
     def __getitem__(self, idx):
         return self.embeddings[idx], self.mortality_labels[idx], self.los_labels[idx], self.mech_labels[idx]
 
-#############################################
 # Unstructured Classifier Definition
-#############################################
 class UnstructuredClassifier(nn.Module):
     def __init__(self, input_size=768, hidden_size=256):
         super(UnstructuredClassifier, self).__init__()
@@ -156,9 +145,7 @@ class UnstructuredClassifier(nn.Module):
         logits = self.classifier(x)
         return logits
 
-#############################################
 # Training and Evaluation Functions
-#############################################
 def train_model(model, dataloader, optimizer, device, criterion_mort, criterion_los, criterion_mech):
     model.train()
     running_loss = 0.0
@@ -225,9 +212,8 @@ def get_patient_probabilities(model, dataloader, device):
     probs = expit(all_logits)
     return probs
 
-#############################################
+
 # Demographic and Fairness Utilities
-#############################################
 def assign_age_bucket(age):
     if 15 <= age <= 29:
         return '15-29'
@@ -252,15 +238,13 @@ def compute_eddi(df, sensitive_attr, true_label_col, pred_label_col):
     eddi = eddi_sum / num_groups if num_groups > 0 else 0.0
     return eddi
 
-#############################################
 # Main Training and Evaluation Pipeline
-#############################################
 def train_pipeline():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("Using device:", device)
 
     # Read the unstructured data CSV.
-    df = pd.read_csv("filtered_unstructured.csv", low_memory=False)
+    df = pd.read_csv("final_unstructured_common.csv", low_memory=False)
     print("Data shape:", df.shape)
     
     # Identify note columns (e.g., columns starting with 'note_').
@@ -291,7 +275,6 @@ def train_pipeline():
     # Use unique patients for labels and demographics.
     df_unique = df_filtered.drop_duplicates(subset="subject_id")
     
-    # Assume the CSV contains the following columns:
     # "short_term_mortality", "los_binary", and "mechanical_ventilation"
     mortality_labels = df_unique["short_term_mortality"].values
     los_labels = df_unique["los_binary"].values
