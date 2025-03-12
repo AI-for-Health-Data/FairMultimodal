@@ -1,0 +1,174 @@
+Epoch 1/10 - Total Loss: 4372.5778
+Epoch 2/10 - Total Loss: 4148.1503
+Epoch 3/10 - Total Loss: 3993.1261
+Epoch 4/10 - Total Loss: 3556.0673
+Epoch 5/10 - Total Loss: 2839.6731
+Epoch 6/10 - Total Loss: 2746.7725
+Epoch 7/10 - Total Loss: 2666.7100
+Epoch 8/10 - Total Loss: 2591.0301
+Epoch 9/10 - Total Loss: 2594.1378
+Epoch 10/10 - Total Loss: 2597.1701
+Evaluation Results:
+{'logits': {'mortality': array([[-0.8311681 ],
+       [-0.88145626],
+       [-2.8534226 ],
+       ...,
+       [-3.7447064 ],
+       [-0.5732837 ],
+       [ 1.1965241 ]], dtype=float32), 'los': array([[ 0.6957748 ],
+       [-1.3633581 ],
+       [-1.6819972 ],
+       ...,
+       [ 1.0651894 ],
+       [-0.42917478],
+       [-1.2419276 ]], dtype=float32), 'mech': array([[ 2.2703192],
+       [-0.7051727],
+       [ 1.377882 ],
+       ...,
+       [ 1.7394655],
+       [ 2.1139605],
+       [ 2.4014237]], dtype=float32)}, 'predictions': {'mortality': array([[0],
+       [0],
+       [0],
+       ...,
+       [0],
+       [0],
+       [1]]), 'los': array([[1],
+       [0],
+       [0],
+       ...,
+       [1],
+       [0],
+       [0]]), 'mech': array([[1],
+       [0],
+       [1],
+       ...,
+       [1],
+       [1],
+       [1]])}, 'labels': array([[0., 1., 1.],
+       [0., 0., 0.],
+       [0., 0., 1.],
+       ...,
+       [0., 1., 1.],
+       [0., 0., 1.],
+       [0., 0., 1.]], dtype=float32), 'auroc': {'mortality': 0.9306096429915168, 'los': 0.9201012432731726, 'mech': 0.8378881356324106}, 'auprc': {'mortality': 0.6744323732833472, 'los': 0.8795479065877179, 'mech': 0.9759777321387193}, 'precision': {'mortality': 0.44843267825239563, 'los': 0.769253166399767, 'mech': 0.920297228131841}, 'recall': {'mortality': 0.8158983451536643, 'los': 0.8239513488227039, 'mech': 0.984173041413875}, 'f1': {'mortality': 0.5787653285819097, 'los': 0.7956633037193194, 'mech': 0.951163939389111}}
+Fairness Evaluation - Gender (Mortality):
+{'equalized_odds': {0: {'TPR': 0.8221288515406162, 'FPR': 0.10683860883157484}, 1: {'TPR': 0.8113496932515337, 'FPR': 0.11592298463120608}}, 'equal_opportunity': {0: {'TPR': 0.8221288515406162}, 1: {'TPR': 0.8113496932515337}}, 'disparity': {'TPR': 0.010779158289082491, 'FPR': 0.009084375799631242}}
+=== EDDI for Age Groups (Mortality) ===
+
+Sensitive Attribute: Age Groups
+Overall Error Rate (OER): 8303.8236
+  Subgroup 15-29: d(s) = -0.9470
+  Subgroup 30-49: d(s) = -0.8281
+  Subgroup 50-69: d(s) = -0.6087
+  Subgroup 70-89: d(s) = -0.6163
+Attribute-level EDDI for Age Groups: 0.3818
+
+=== EDDI for Ethnicity Groups (Mortality) ===
+
+Sensitive Attribute: Ethnicity Groups
+Overall Error Rate (OER): 8303.8236
+  Subgroup Asian: d(s) = -0.9776
+  Subgroup Black: d(s) = -0.9224
+  Subgroup Hispanic: d(s) = -0.9653
+  Subgroup Other: d(s) = -0.8400
+  Subgroup White: d(s) = -0.2947
+Attribute-level EDDI for Ethnicity Groups: 0.3758
+
+=== EDDI for Insurance Groups (Mortality) ===
+
+Sensitive Attribute: Insurance Groups
+Overall Error Rate (OER): 8303.8236
+  Subgroup Government: d(s) = -0.9709
+  Subgroup Medicaid: d(s) = -0.9139
+  Subgroup Medicare: d(s) = -0.4931
+  Subgroup Private: d(s) = -0.6352
+  Subgroup Self Pay: d(s) = -0.9869
+Attribute-level EDDI for Insurance Groups: 0.3687
+
+
+Overall EDDI for Mortality Predictions: 0.2168
+
+=== EDDI for Age Groups (LOS) ===
+
+Sensitive Attribute: Age Groups
+Overall Error Rate (OER): 16101.2253
+  Subgroup 15-29: d(s) = -0.9456
+  Subgroup 30-49: d(s) = -0.8299
+  Subgroup 50-69: d(s) = -0.6059
+  Subgroup 70-89: d(s) = -0.6187
+Attribute-level EDDI for Age Groups: 0.3818
+
+=== EDDI for Ethnicity Groups (LOS) ===
+
+Sensitive Attribute: Ethnicity Groups
+Overall Error Rate (OER): 16101.2253
+  Subgroup Asian: d(s) = -0.9774
+  Subgroup Black: d(s) = -0.9234
+  Subgroup Hispanic: d(s) = -0.9666
+  Subgroup Other: d(s) = -0.8438
+  Subgroup White: d(s) = -0.2890
+Attribute-level EDDI for Ethnicity Groups: 0.3762
+
+=== EDDI for Insurance Groups (LOS) ===
+
+Sensitive Attribute: Insurance Groups
+Overall Error Rate (OER): 16101.2253
+  Subgroup Government: d(s) = -0.9683
+  Subgroup Medicaid: d(s) = -0.9152
+  Subgroup Medicare: d(s) = -0.4897
+  Subgroup Private: d(s) = -0.6401
+  Subgroup Self Pay: d(s) = -0.9866
+Attribute-level EDDI for Insurance Groups: 0.3687
+
+
+Overall EDDI for LOS Predictions: 0.2169
+
+=== EDDI for Age Groups (Mechanical Ventilation) ===
+
+Sensitive Attribute: Age Groups
+Overall Error Rate (OER): 4354.2531
+  Subgroup 15-29: d(s) = -0.9430
+  Subgroup 30-49: d(s) = -0.8253
+  Subgroup 50-69: d(s) = -0.6081
+  Subgroup 70-89: d(s) = -0.6236
+Attribute-level EDDI for Age Groups: 0.3815
+
+=== EDDI for Ethnicity Groups (Mechanical Ventilation) ===
+
+Sensitive Attribute: Ethnicity Groups
+Overall Error Rate (OER): 4354.2531
+  Subgroup Asian: d(s) = -0.9771
+  Subgroup Black: d(s) = -0.9238
+  Subgroup Hispanic: d(s) = -0.9613
+  Subgroup Other: d(s) = -0.8446
+  Subgroup White: d(s) = -0.2932
+Attribute-level EDDI for Ethnicity Groups: 0.3759
+
+=== EDDI for Insurance Groups (Mechanical Ventilation) ===
+
+Sensitive Attribute: Insurance Groups
+Overall Error Rate (OER): 4354.2531
+  Subgroup Government: d(s) = -0.9706
+  Subgroup Medicaid: d(s) = -0.9095
+  Subgroup Medicare: d(s) = -0.4916
+  Subgroup Private: d(s) = -0.6392
+  Subgroup Self Pay: d(s) = -0.9889
+Attribute-level EDDI for Insurance Groups: 0.3687
+
+
+Overall EDDI for Mechanical Ventilation Predictions: 0.2167
+
+Detailed EDDI values for each Age Group (Mortality):
+  Age Group 15-29: EDDI = -0.9470
+  Age Group 30-49: EDDI = -0.8281
+  Age Group 50-69: EDDI = -0.6087
+  Age Group 70-89: EDDI = -0.6163
+
+Overall EDDI for Model Predictions (Mortality): 0.2168
+
+Jitter Plot for Short-term Mortality
+
+Jitter Plot for LOS > 3 Days
+
+Jitter Plot for Mechanical Ventilation
