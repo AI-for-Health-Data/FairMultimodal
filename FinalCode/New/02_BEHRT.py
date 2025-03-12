@@ -18,12 +18,10 @@ import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 from scipy.stats import chi2_contingency, ttest_ind
 
-
 # Data Preprocessing and Label Creation
-# Read the structured common dataset.
 df = pd.read_csv('final_structured_common.csv')
 
-# Map hadm_id to a disease ID
+# Map hadm_id to a disease ID (used as a proxy feature).
 unique_diseases = df['hadm_id'].unique()
 disease_mapping = {d: i for i, d in enumerate(unique_diseases)}
 df['mapped_disease_id'] = df['hadm_id'].map(disease_mapping)
@@ -78,8 +76,6 @@ df['INSURANCE'] = df['INSURANCE'].astype('category').cat.codes
 # Fill missing age values.
 df['age'] = df['age'].fillna(0)
 
-# For LOS, assume that the column "los_binary" is our target for LOS > 3 days.
-# Filter records: include only those where the record is at least 6 hours before discharge or death.
 df_filtered = df[
     ((df['time_to_discharge'] > 6) & (df['short_term_mortality'] == 0)) |
     ((df['time_to_death'] > 6) & (df['short_term_mortality'] == 1))
@@ -96,7 +92,8 @@ def prepare_sequences(df):
         patient_data = df[df['subject_id'] == patient].sort_values(by='ADMITTIME')
         
         # Feature sequences.
-        age_sequence = patient_data['age'].tolist()
+        # Convert age to int to avoid deprecation warnings in embedding.
+        age_sequence = patient_data['age'].astype(int).tolist()
         disease_sequence = patient_data['mapped_disease_id'].tolist()
         segment_sequence = [0 if i % 2 == 0 else 1 for i in range(len(age_sequence))]
         
@@ -207,6 +204,9 @@ class BEHRTModel(nn.Module):
 
     def forward(self, input_ids, age_ids, segment_ids, admission_loc_ids, discharge_loc_ids,
                 gender_ids, ethnicity_ids, insurance_ids, attention_mask=None):
+        if attention_mask is None:
+            attention_mask = (input_ids != 0).long()
+            
         # Clamp IDs to valid ranges.
         age_ids = torch.clamp(age_ids, min=0, max=self.age_embedding.num_embeddings - 1)
         segment_ids = torch.clamp(segment_ids, min=0, max=self.segment_embedding.num_embeddings - 1)
@@ -517,7 +517,7 @@ fairness_results_gender = evaluate_fairness(labels_arr[:, 0], preds_mort, sensit
 print("Fairness Evaluation - Gender (Mortality):")
 print(fairness_results_gender)
 
-# Update age bins to cover all ages (using provided bins).
+# Update age bins to cover all ages
 age_bins = [15, 30, 50, 70, 90]
 age_labels_bins = ['15-29', '30-49', '50-69', '70-89']
 df_filtered['age_group'] = pd.cut(df_filtered['age'], bins=age_bins, labels=age_labels_bins, right=False)
@@ -570,7 +570,8 @@ def print_subgroup_eddi(true, pred, sensitive_name, sensitive_values):
     print(f"Attribute-level EDDI for {sensitive_name}: {attribute_eddi:.4f}\n")
     return subgroup_disparities, attribute_eddi
 
-# For Mortality (already computed above), we have:
+# Compute and print detailed EDDI metrics for each outcome.
+# For Mortality:
 print("=== EDDI for Age Groups (Mortality) ===")
 age_subgroups_mort, age_eddi_mort = print_subgroup_eddi(labels_arr[:, 0], preds_mort, "Age Groups", age_groups)
 print("=== EDDI for Ethnicity Groups (Mortality) ===")
@@ -600,18 +601,17 @@ insurance_subgroups_mech, insurance_eddi_mech = print_subgroup_eddi(labels_arr[:
 overall_eddi_mech = np.sqrt(age_eddi_mech**2 + ethnicity_eddi_mech**2 + insurance_eddi_mech**2) / 3
 print(f"\nOverall EDDI for Mechanical Ventilation Predictions: {overall_eddi_mech:.4f}\n")
 
-# Detailed EDDI for each age group.
+# Detailed EDDI for each age group for Mortality.
 age_group_list = ['15-29', '30-49', '50-69', '70-89']
-print("Detailed EDDI values for each Age Group:")
+print("Detailed EDDI values for each Age Group (Mortality):")
 for group in age_group_list:
-    disparity = age_subgroups.get(group, None)
+    disparity = age_subgroups_mort.get(group, None)  # Fixed variable name here.
     if disparity is not None:
         print(f"  Age Group {group}: EDDI = {disparity:.4f}")
     else:
         print(f"  Age Group {group}: No data available")
 
-# Combine attribute-level EDDI scores.
-overall_eddi = np.sqrt(age_eddi**2 + ethnicity_eddi**2 + insurance_eddi**2) / 3
+overall_eddi = np.sqrt(age_eddi_mort**2 + ethnicity_eddi_mort**2 + insurance_eddi_mort**2) / 3
 print(f"\nOverall EDDI for Model Predictions (Mortality): {overall_eddi:.4f}")
 
 # Jitter Plot for Prediction Probabilities
