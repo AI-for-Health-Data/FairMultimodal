@@ -18,10 +18,6 @@ from sklearn.metrics import roc_auc_score, average_precision_score, f1_score, re
 
 DEBUG = True
 
-# ------------------------------
-# Loss, Metrics & Utility Functions
-# ------------------------------
-
 class FocalLoss(nn.Module):
     def __init__(self, gamma=2, alpha=None, reduction='mean', pos_weight=None):
         super(FocalLoss, self).__init__()
@@ -109,10 +105,6 @@ def compute_eddi(y_true, y_pred, sensitive_labels):
     eddi_attr = np.sqrt(np.sum(np.array(list(subgroup_eddi.values()))**2)) / len(unique_groups)
     return eddi_attr, subgroup_eddi
 
-# ------------------------------
-# Model Components
-# ------------------------------
-
 # BioClinicalBERT Fine-Tuning Model for text.
 class BioClinicalBERT_FT(nn.Module):
     def __init__(self, base_model, config, device):
@@ -196,7 +188,7 @@ class BEHRTModel_Demo(nn.Module):
         demo_embedding = cls_token + extra
         return demo_embedding
 
-# BEHRT Model for Lab Features (Structured Data Branch).
+# BEHRT Model for Lab Features
 class BEHRTModel_Lab(nn.Module):
     def __init__(self, lab_token_count, hidden_size=768, nhead=8, num_layers=2):
         super(BEHRTModel_Lab, self).__init__()
@@ -278,12 +270,7 @@ class MultimodalTransformer(nn.Module):
         mortality_logits = logits[:, 0].unsqueeze(1)
         los_logits = logits[:, 1].unsqueeze(1)
         mech_logits = logits[:, 2].unsqueeze(1)
-        # Return final aggregated embedding (for potential fairness analysis) as well.
         return mortality_logits, los_logits, mech_logits, aggregated
-
-# ------------------------------
-# Training and Evaluation Functions
-# ------------------------------
 
 def train_step(model, dataloader, optimizer, device, criterion_mortality, criterion_los, criterion_mech):
     model.train()
@@ -371,7 +358,7 @@ def evaluate_model(model, dataloader, device, threshold=0.5, print_eddi=False):
     }
     
     # Updated subgroup orders.
-    age_order = ["15-29", "30-49", "50-69", "70-90", "Other"]
+    age_order = ["15-29", "30-49", "50-69", "70-89"]
     ethnicity_order = ["White", "Black", "Hispanic", "Asian", "Other"]
     insurance_order = ["Government", "Medicare", "Medicaid", "Private", "Self Pay", "Other"]
     
@@ -439,15 +426,10 @@ def evaluate_model(model, dataloader, device, threshold=0.5, print_eddi=False):
     
     return metrics
 
-# ------------------------------
-# Training Pipeline
-# ------------------------------
-
 def train_pipeline():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("Using device:", device)
 
-    # Merge Structured and Unstructured Data.
     structured_data = pd.read_csv('final_structured_common.csv', low_memory=False)
     unstructured_data = pd.read_csv("final_unstructured_common.csv", low_memory=False)
     print("\n--- Debug Info: Before Merge ---")
@@ -470,7 +452,6 @@ def train_pipeline():
     if merged_df.empty:
         raise ValueError("Merged DataFrame is empty. Check your merge keys.")
     
-    # Ensure outcomes are integers.
     merged_df["short_term_mortality"] = merged_df["short_term_mortality"].astype(int)
     merged_df["los_binary"] = merged_df["los_binary"].astype(int)
     merged_df["mechanical_ventilation"] = merged_df["mechanical_ventilation"].astype(int)
