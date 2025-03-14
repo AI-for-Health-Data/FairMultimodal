@@ -1,0 +1,493 @@
+Using device: cuda
+
+--- Debug Info: Before Merge ---
+Structured data shape: (33721, 561)
+Unstructured data shape: (33721, 1037)
+After filtering, number of rows: 33721
+Number of lab feature columns: 545
+
+--- Demographics Hyperparameters ---
+NUM_AGES: 75
+NUM_GENDERS: 2
+NUM_ETHNICITIES: 41
+NUM_INSURANCES: 5
+NUM_LAB_FEATURES (tokens): 545
+Positive weight: 8.868597984313965
+
+Training with beta = 0.1
+[Beta 0.1 | Epoch 1] Train Loss: 150.9115
+[Epoch 1] Mortality - AUROC: 0.6966, AUPRC: 0.2459, F1: 0.1840, Recall: 1.0000, Precision: 0.1013
+[Epoch 1] LOS - AUROC: 0.9967, AUPRC: 0.9947, F1: 0.5511, Recall: 1.0000, Precision: 0.3804
+[Epoch 1] Mechanical Ventilation - AUROC: 0.7499, AUPRC: 0.9641, F1: 0.9475, Recall: 1.0000, Precision: 0.9002
+[Beta 0.1 | Epoch 2] Train Loss: 3.5596
+[Epoch 2] Mortality - AUROC: 0.7247, AUPRC: 0.2882, F1: 0.1840, Recall: 1.0000, Precision: 0.1013
+[Epoch 2] LOS - AUROC: 0.9986, AUPRC: 0.9975, F1: 0.5511, Recall: 1.0000, Precision: 0.3804
+[Epoch 2] Mechanical Ventilation - AUROC: 0.7454, AUPRC: 0.9628, F1: 0.9475, Recall: 1.0000, Precision: 0.9002
+[Beta 0.1 | Epoch 3] Train Loss: 3.5447
+[Epoch 3] Mortality - AUROC: 0.7444, AUPRC: 0.3244, F1: 0.1840, Recall: 1.0000, Precision: 0.1013
+[Epoch 3] LOS - AUROC: 0.9998, AUPRC: 0.9996, F1: 0.5511, Recall: 1.0000, Precision: 0.3804
+[Epoch 3] Mechanical Ventilation - AUROC: 0.7638, AUPRC: 0.9655, F1: 0.9475, Recall: 1.0000, Precision: 0.9002
+[Beta 0.1 | Epoch 4] Train Loss: 3.5390
+[Epoch 4] Mortality - AUROC: 0.7520, AUPRC: 0.3479, F1: 0.1840, Recall: 1.0000, Precision: 0.1013
+[Epoch 4] LOS - AUROC: 0.9998, AUPRC: 0.9998, F1: 0.5511, Recall: 1.0000, Precision: 0.3804
+[Epoch 4] Mechanical Ventilation - AUROC: 0.7706, AUPRC: 0.9667, F1: 0.9475, Recall: 1.0000, Precision: 0.9002
+[Beta 0.1 | Epoch 5] Train Loss: 3.5337
+[Epoch 5] Mortality - AUROC: 0.7481, AUPRC: 0.3666, F1: 0.1840, Recall: 1.0000, Precision: 0.1013
+[Epoch 5] LOS - AUROC: 0.9987, AUPRC: 0.9970, F1: 0.5511, Recall: 1.0000, Precision: 0.3804
+[Epoch 5] Mechanical Ventilation - AUROC: 0.7715, AUPRC: 0.9666, F1: 0.9475, Recall: 1.0000, Precision: 0.9002
+[Beta 0.1 | Epoch 6] Train Loss: 3.5305
+[Epoch 6] Mortality - AUROC: 0.7536, AUPRC: 0.3878, F1: 0.1840, Recall: 1.0000, Precision: 0.1013
+[Epoch 6] LOS - AUROC: 0.9981, AUPRC: 0.9952, F1: 0.5511, Recall: 1.0000, Precision: 0.3804
+[Epoch 6] Mechanical Ventilation - AUROC: 0.7768, AUPRC: 0.9670, F1: 0.9475, Recall: 1.0000, Precision: 0.9002
+[Beta 0.1 | Epoch 7] Train Loss: 3.5289
+[Epoch 7] Mortality - AUROC: 0.7587, AUPRC: 0.4133, F1: 0.1840, Recall: 1.0000, Precision: 0.1013
+[Epoch 7] LOS - AUROC: 0.9990, AUPRC: 0.9971, F1: 0.5511, Recall: 1.0000, Precision: 0.3804
+[Epoch 7] Mechanical Ventilation - AUROC: 0.7777, AUPRC: 0.9672, F1: 0.9475, Recall: 1.0000, Precision: 0.9002
+[Beta 0.1 | Epoch 8] Train Loss: 3.5271
+[Epoch 8] Mortality - AUROC: 0.7587, AUPRC: 0.4121, F1: 0.1840, Recall: 1.0000, Precision: 0.1013
+[Epoch 8] LOS - AUROC: 0.9986, AUPRC: 0.9962, F1: 0.5511, Recall: 1.0000, Precision: 0.3804
+[Epoch 8] Mechanical Ventilation - AUROC: 0.7848, AUPRC: 0.9682, F1: 0.9475, Recall: 1.0000, Precision: 0.9002
+[Beta 0.1 | Epoch 9] Train Loss: 3.5247
+[Epoch 9] Mortality - AUROC: 0.7647, AUPRC: 0.4144, F1: 0.1840, Recall: 1.0000, Precision: 0.1013
+[Epoch 9] LOS - AUROC: 0.9976, AUPRC: 0.9978, F1: 0.5511, Recall: 1.0000, Precision: 0.3804
+[Epoch 9] Mechanical Ventilation - AUROC: 0.7972, AUPRC: 0.9708, F1: 0.9475, Recall: 1.0000, Precision: 0.9002
+[Beta 0.1 | Epoch 10] Train Loss: 3.5242
+[Epoch 10] Mortality - AUROC: 0.7653, AUPRC: 0.4037, F1: 0.1840, Recall: 1.0000, Precision: 0.1013
+[Epoch 10] LOS - AUROC: 1.0000, AUPRC: 0.9999, F1: 0.5511, Recall: 1.0000, Precision: 0.3804
+[Epoch 10] Mechanical Ventilation - AUROC: 0.7885, AUPRC: 0.9688, F1: 0.9475, Recall: 1.0000, Precision: 0.9002
+[Beta 0.1 | Epoch 11] Train Loss: 3.5233
+[Epoch 11] Mortality - AUROC: 0.7679, AUPRC: 0.4155, F1: 0.1840, Recall: 1.0000, Precision: 0.1013
+[Epoch 11] LOS - AUROC: 0.9974, AUPRC: 0.9977, F1: 0.5511, Recall: 1.0000, Precision: 0.3804
+[Epoch 11] Mechanical Ventilation - AUROC: 0.8016, AUPRC: 0.9713, F1: 0.9475, Recall: 1.0000, Precision: 0.9002
+[Beta 0.1 | Epoch 12] Train Loss: 3.5217
+[Epoch 12] Mortality - AUROC: 0.7676, AUPRC: 0.4142, F1: 0.1840, Recall: 1.0000, Precision: 0.1013
+[Epoch 12] LOS - AUROC: 0.9995, AUPRC: 0.9988, F1: 0.5511, Recall: 1.0000, Precision: 0.3804
+[Epoch 12] Mechanical Ventilation - AUROC: 0.7951, AUPRC: 0.9697, F1: 0.9475, Recall: 1.0000, Precision: 0.9002
+[Beta 0.1 | Epoch 13] Train Loss: 3.5199
+[Epoch 13] Mortality - AUROC: 0.7658, AUPRC: 0.4241, F1: 0.1840, Recall: 1.0000, Precision: 0.1013
+[Epoch 13] LOS - AUROC: 0.9975, AUPRC: 0.9942, F1: 0.5511, Recall: 1.0000, Precision: 0.3804
+[Epoch 13] Mechanical Ventilation - AUROC: 0.7977, AUPRC: 0.9702, F1: 0.9475, Recall: 1.0000, Precision: 0.9002
+[Beta 0.1 | Epoch 14] Train Loss: 3.5196
+[Epoch 14] Mortality - AUROC: 0.7701, AUPRC: 0.4259, F1: 0.1840, Recall: 1.0000, Precision: 0.1013
+[Epoch 14] LOS - AUROC: 0.9983, AUPRC: 0.9985, F1: 0.5511, Recall: 1.0000, Precision: 0.3804
+[Epoch 14] Mechanical Ventilation - AUROC: 0.8041, AUPRC: 0.9716, F1: 0.9475, Recall: 1.0000, Precision: 0.9002
+[Beta 0.1 | Epoch 15] Train Loss: 3.5185
+[Epoch 15] Mortality - AUROC: 0.7753, AUPRC: 0.4130, F1: 0.1840, Recall: 1.0000, Precision: 0.1013
+[Epoch 15] LOS - AUROC: 0.9824, AUPRC: 0.9843, F1: 0.5511, Recall: 1.0000, Precision: 0.3804
+[Epoch 15] Mechanical Ventilation - AUROC: 0.8034, AUPRC: 0.9710, F1: 0.9475, Recall: 1.0000, Precision: 0.9002
+[Beta 0.1 | Epoch 16] Train Loss: 3.5172
+[Epoch 16] Mortality - AUROC: 0.7631, AUPRC: 0.4174, F1: 0.1840, Recall: 1.0000, Precision: 0.1013
+[Epoch 16] LOS - AUROC: 0.9949, AUPRC: 0.9906, F1: 0.5511, Recall: 1.0000, Precision: 0.3804
+[Epoch 16] Mechanical Ventilation - AUROC: 0.8109, AUPRC: 0.9722, F1: 0.9475, Recall: 1.0000, Precision: 0.9002
+[Beta 0.1 | Epoch 17] Train Loss: 3.5178
+[Epoch 17] Mortality - AUROC: 0.7750, AUPRC: 0.4104, F1: 0.1840, Recall: 1.0000, Precision: 0.1013
+[Epoch 17] LOS - AUROC: 0.9813, AUPRC: 0.9818, F1: 0.5511, Recall: 1.0000, Precision: 0.3804
+[Epoch 17] Mechanical Ventilation - AUROC: 0.8085, AUPRC: 0.9721, F1: 0.9475, Recall: 1.0000, Precision: 0.9002
+[Beta 0.1 | Epoch 18] Train Loss: 3.5162
+[Epoch 18] Mortality - AUROC: 0.7768, AUPRC: 0.4247, F1: 0.1840, Recall: 1.0000, Precision: 0.1013
+[Epoch 18] LOS - AUROC: 0.9982, AUPRC: 0.9984, F1: 0.5511, Recall: 1.0000, Precision: 0.3804
+[Epoch 18] Mechanical Ventilation - AUROC: 0.8065, AUPRC: 0.9717, F1: 0.9475, Recall: 1.0000, Precision: 0.9002
+[Beta 0.1 | Epoch 19] Train Loss: 3.5145
+[Epoch 19] Mortality - AUROC: 0.7748, AUPRC: 0.4341, F1: 0.1840, Recall: 1.0000, Precision: 0.1013
+[Epoch 19] LOS - AUROC: 0.9996, AUPRC: 0.9996, F1: 0.5511, Recall: 1.0000, Precision: 0.3804
+[Epoch 19] Mechanical Ventilation - AUROC: 0.8093, AUPRC: 0.9721, F1: 0.9475, Recall: 1.0000, Precision: 0.9002
+[Beta 0.1 | Epoch 20] Train Loss: 3.5141
+[Epoch 20] Mortality - AUROC: 0.7738, AUPRC: 0.4282, F1: 0.1840, Recall: 1.0000, Precision: 0.1013
+[Epoch 20] LOS - AUROC: 0.9970, AUPRC: 0.9964, F1: 0.5511, Recall: 1.0000, Precision: 0.3804
+[Epoch 20] Mechanical Ventilation - AUROC: 0.8100, AUPRC: 0.9723, F1: 0.9475, Recall: 1.0000, Precision: 0.9002
+
+Training with beta = 0.2
+[Beta 0.2 | Epoch 1] Train Loss: 3.5151
+[Epoch 1] Mortality - AUROC: 0.7806, AUPRC: 0.4481, F1: 0.1840, Recall: 1.0000, Precision: 0.1013
+[Epoch 1] LOS - AUROC: 0.9980, AUPRC: 0.9982, F1: 0.5511, Recall: 1.0000, Precision: 0.3804
+[Epoch 1] Mechanical Ventilation - AUROC: 0.8139, AUPRC: 0.9731, F1: 0.9475, Recall: 1.0000, Precision: 0.9002
+[Beta 0.2 | Epoch 2] Train Loss: 3.5145
+[Epoch 2] Mortality - AUROC: 0.7741, AUPRC: 0.4020, F1: 0.1840, Recall: 1.0000, Precision: 0.1013
+[Epoch 2] LOS - AUROC: 0.9963, AUPRC: 0.9967, F1: 0.5511, Recall: 1.0000, Precision: 0.3804
+[Epoch 2] Mechanical Ventilation - AUROC: 0.8210, AUPRC: 0.9746, F1: 0.9475, Recall: 1.0000, Precision: 0.9002
+[Beta 0.2 | Epoch 3] Train Loss: 3.5150
+[Epoch 3] Mortality - AUROC: 0.7766, AUPRC: 0.4472, F1: 0.1840, Recall: 1.0000, Precision: 0.1013
+[Epoch 3] LOS - AUROC: 0.9975, AUPRC: 0.9974, F1: 0.5511, Recall: 1.0000, Precision: 0.3804
+[Epoch 3] Mechanical Ventilation - AUROC: 0.8188, AUPRC: 0.9739, F1: 0.9475, Recall: 1.0000, Precision: 0.9002
+[Beta 0.2 | Epoch 4] Train Loss: 3.5086
+[Epoch 4] Mortality - AUROC: 0.7778, AUPRC: 0.4387, F1: 0.1840, Recall: 1.0000, Precision: 0.1013
+[Epoch 4] LOS - AUROC: 0.9984, AUPRC: 0.9985, F1: 0.5511, Recall: 1.0000, Precision: 0.3804
+[Epoch 4] Mechanical Ventilation - AUROC: 0.8179, AUPRC: 0.9733, F1: 0.9475, Recall: 1.0000, Precision: 0.9002
+[Beta 0.2 | Epoch 5] Train Loss: 3.5081
+[Epoch 5] Mortality - AUROC: 0.7782, AUPRC: 0.4365, F1: 0.1840, Recall: 1.0000, Precision: 0.1013
+[Epoch 5] LOS - AUROC: 0.9978, AUPRC: 0.9981, F1: 0.5511, Recall: 1.0000, Precision: 0.3804
+[Epoch 5] Mechanical Ventilation - AUROC: 0.8201, AUPRC: 0.9737, F1: 0.9475, Recall: 1.0000, Precision: 0.9002
+[Beta 0.2 | Epoch 6] Train Loss: 3.5079
+[Epoch 6] Mortality - AUROC: 0.7786, AUPRC: 0.4399, F1: 0.1840, Recall: 1.0000, Precision: 0.1013
+[Epoch 6] LOS - AUROC: 0.9981, AUPRC: 0.9983, F1: 0.5511, Recall: 1.0000, Precision: 0.3804
+[Epoch 6] Mechanical Ventilation - AUROC: 0.8207, AUPRC: 0.9738, F1: 0.9475, Recall: 1.0000, Precision: 0.9002
+[Beta 0.2 | Epoch 7] Train Loss: 3.5077
+[Epoch 7] Mortality - AUROC: 0.7784, AUPRC: 0.4412, F1: 0.1840, Recall: 1.0000, Precision: 0.1013
+[Epoch 7] LOS - AUROC: 0.9976, AUPRC: 0.9978, F1: 0.5511, Recall: 1.0000, Precision: 0.3804
+[Epoch 7] Mechanical Ventilation - AUROC: 0.8211, AUPRC: 0.9739, F1: 0.9475, Recall: 1.0000, Precision: 0.9002
+[Beta 0.2 | Epoch 8] Train Loss: 3.5075
+[Epoch 8] Mortality - AUROC: 0.7805, AUPRC: 0.4443, F1: 0.1840, Recall: 1.0000, Precision: 0.1013
+[Epoch 8] LOS - AUROC: 0.9977, AUPRC: 0.9981, F1: 0.5511, Recall: 1.0000, Precision: 0.3804
+[Epoch 8] Mechanical Ventilation - AUROC: 0.8217, AUPRC: 0.9741, F1: 0.9475, Recall: 1.0000, Precision: 0.9002
+[Beta 0.2 | Epoch 9] Train Loss: 3.5056
+[Epoch 9] Mortality - AUROC: 0.7616, AUPRC: 0.4400, F1: 0.1840, Recall: 1.0000, Precision: 0.1013
+[Epoch 9] LOS - AUROC: 0.9975, AUPRC: 0.9978, F1: 0.5511, Recall: 1.0000, Precision: 0.3804
+[Epoch 9] Mechanical Ventilation - AUROC: 0.8558, AUPRC: 0.9789, F1: 0.9475, Recall: 1.0000, Precision: 0.9002
+[Beta 0.2 | Epoch 10] Train Loss: 3.5011
+[Epoch 10] Mortality - AUROC: 0.7632, AUPRC: 0.4393, F1: 0.1840, Recall: 1.0000, Precision: 0.1013
+[Epoch 10] LOS - AUROC: 0.9966, AUPRC: 0.9966, F1: 0.5511, Recall: 1.0000, Precision: 0.3804
+[Epoch 10] Mechanical Ventilation - AUROC: 0.8497, AUPRC: 0.9782, F1: 0.9475, Recall: 1.0000, Precision: 0.9002
+[Beta 0.2 | Epoch 11] Train Loss: 3.5006
+[Epoch 11] Mortality - AUROC: 0.7729, AUPRC: 0.4440, F1: 0.1840, Recall: 1.0000, Precision: 0.1013
+[Epoch 11] LOS - AUROC: 0.9966, AUPRC: 0.9959, F1: 0.5511, Recall: 1.0000, Precision: 0.3804
+[Epoch 11] Mechanical Ventilation - AUROC: 0.8449, AUPRC: 0.9776, F1: 0.9475, Recall: 1.0000, Precision: 0.9002
+[Beta 0.2 | Epoch 12] Train Loss: 3.4998
+[Epoch 12] Mortality - AUROC: 0.7719, AUPRC: 0.4429, F1: 0.1840, Recall: 1.0000, Precision: 0.1013
+[Epoch 12] LOS - AUROC: 0.9976, AUPRC: 0.9975, F1: 0.5511, Recall: 1.0000, Precision: 0.3804
+[Epoch 12] Mechanical Ventilation - AUROC: 0.8488, AUPRC: 0.9781, F1: 0.9475, Recall: 1.0000, Precision: 0.9002
+[Beta 0.2 | Epoch 13] Train Loss: 3.4991
+[Epoch 13] Mortality - AUROC: 0.7742, AUPRC: 0.4453, F1: 0.1840, Recall: 1.0000, Precision: 0.1013
+[Epoch 13] LOS - AUROC: 0.9966, AUPRC: 0.9962, F1: 0.5511, Recall: 1.0000, Precision: 0.3804
+[Epoch 13] Mechanical Ventilation - AUROC: 0.8544, AUPRC: 0.9790, F1: 0.9475, Recall: 1.0000, Precision: 0.9002
+[Beta 0.2 | Epoch 14] Train Loss: 3.4983
+[Epoch 14] Mortality - AUROC: 0.7753, AUPRC: 0.4427, F1: 0.1840, Recall: 1.0000, Precision: 0.1013
+[Epoch 14] LOS - AUROC: 0.9970, AUPRC: 0.9967, F1: 0.5511, Recall: 1.0000, Precision: 0.3804
+[Epoch 14] Mechanical Ventilation - AUROC: 0.8572, AUPRC: 0.9793, F1: 0.9475, Recall: 1.0000, Precision: 0.9002
+[Beta 0.2 | Epoch 15] Train Loss: 3.4978
+[Epoch 15] Mortality - AUROC: 0.7760, AUPRC: 0.4488, F1: 0.1840, Recall: 1.0000, Precision: 0.1013
+[Epoch 15] LOS - AUROC: 0.9954, AUPRC: 0.9951, F1: 0.5511, Recall: 1.0000, Precision: 0.3804
+[Epoch 15] Mechanical Ventilation - AUROC: 0.8624, AUPRC: 0.9801, F1: 0.9475, Recall: 1.0000, Precision: 0.9002
+[Beta 0.2 | Epoch 16] Train Loss: 3.4971
+[Epoch 16] Mortality - AUROC: 0.7801, AUPRC: 0.4521, F1: 0.1840, Recall: 1.0000, Precision: 0.1013
+[Epoch 16] LOS - AUROC: 0.9959, AUPRC: 0.9940, F1: 0.5511, Recall: 1.0000, Precision: 0.3804
+[Epoch 16] Mechanical Ventilation - AUROC: 0.8612, AUPRC: 0.9798, F1: 0.9475, Recall: 1.0000, Precision: 0.9002
+[Beta 0.2 | Epoch 17] Train Loss: 3.4960
+[Epoch 17] Mortality - AUROC: 0.7744, AUPRC: 0.4502, F1: 0.1840, Recall: 1.0000, Precision: 0.1013
+[Epoch 17] LOS - AUROC: 0.9974, AUPRC: 0.9961, F1: 0.5511, Recall: 1.0000, Precision: 0.3804
+[Epoch 17] Mechanical Ventilation - AUROC: 0.8593, AUPRC: 0.9795, F1: 0.9475, Recall: 1.0000, Precision: 0.9002
+[Beta 0.2 | Epoch 18] Train Loss: 3.4957
+[Epoch 18] Mortality - AUROC: 0.7782, AUPRC: 0.4521, F1: 0.1840, Recall: 1.0000, Precision: 0.1013
+[Epoch 18] LOS - AUROC: 0.9968, AUPRC: 0.9955, F1: 0.5511, Recall: 1.0000, Precision: 0.3804
+[Epoch 18] Mechanical Ventilation - AUROC: 0.8633, AUPRC: 0.9801, F1: 0.9475, Recall: 1.0000, Precision: 0.9002
+[Beta 0.2 | Epoch 19] Train Loss: 3.4952
+[Epoch 19] Mortality - AUROC: 0.7796, AUPRC: 0.4531, F1: 0.1840, Recall: 1.0000, Precision: 0.1013
+[Epoch 19] LOS - AUROC: 0.9961, AUPRC: 0.9932, F1: 0.5511, Recall: 1.0000, Precision: 0.3804
+[Epoch 19] Mechanical Ventilation - AUROC: 0.8620, AUPRC: 0.9799, F1: 0.9475, Recall: 1.0000, Precision: 0.9002
+[Beta 0.2 | Epoch 20] Train Loss: 3.4947
+[Epoch 20] Mortality - AUROC: 0.7741, AUPRC: 0.4492, F1: 0.1840, Recall: 1.0000, Precision: 0.1013
+[Epoch 20] LOS - AUROC: 0.9981, AUPRC: 0.9970, F1: 0.5511, Recall: 1.0000, Precision: 0.3804
+[Epoch 20] Mechanical Ventilation - AUROC: 0.8602, AUPRC: 0.9795, F1: 0.9475, Recall: 1.0000, Precision: 0.9002
+
+Training with beta = 0.3
+[Beta 0.3 | Epoch 1] Train Loss: 3.4960
+[Epoch 1] Mortality - AUROC: 0.7886, AUPRC: 0.4519, F1: 0.1840, Recall: 1.0000, Precision: 0.1013
+[Epoch 1] LOS - AUROC: 0.9940, AUPRC: 0.9888, F1: 0.5511, Recall: 1.0000, Precision: 0.3804
+[Epoch 1] Mechanical Ventilation - AUROC: 0.8696, AUPRC: 0.9806, F1: 0.9475, Recall: 1.0000, Precision: 0.9002
+[Beta 0.3 | Epoch 2] Train Loss: 3.4946
+[Epoch 2] Mortality - AUROC: 0.7852, AUPRC: 0.4531, F1: 0.1840, Recall: 1.0000, Precision: 0.1013
+[Epoch 2] LOS - AUROC: 0.9951, AUPRC: 0.9920, F1: 0.5511, Recall: 1.0000, Precision: 0.3804
+[Epoch 2] Mechanical Ventilation - AUROC: 0.8696, AUPRC: 0.9806, F1: 0.9475, Recall: 1.0000, Precision: 0.9002
+[Beta 0.3 | Epoch 3] Train Loss: 3.4936
+[Epoch 3] Mortality - AUROC: 0.7887, AUPRC: 0.4584, F1: 0.1840, Recall: 1.0000, Precision: 0.1013
+[Epoch 3] LOS - AUROC: 0.9944, AUPRC: 0.9901, F1: 0.5511, Recall: 1.0000, Precision: 0.3804
+[Epoch 3] Mechanical Ventilation - AUROC: 0.8712, AUPRC: 0.9809, F1: 0.9475, Recall: 1.0000, Precision: 0.9002
+[Beta 0.3 | Epoch 4] Train Loss: 3.4935
+[Epoch 4] Mortality - AUROC: 0.7869, AUPRC: 0.4594, F1: 0.1840, Recall: 1.0000, Precision: 0.1013
+[Epoch 4] LOS - AUROC: 0.9947, AUPRC: 0.9916, F1: 0.5511, Recall: 1.0000, Precision: 0.3804
+[Epoch 4] Mechanical Ventilation - AUROC: 0.8710, AUPRC: 0.9809, F1: 0.9475, Recall: 1.0000, Precision: 0.9002
+[Beta 0.3 | Epoch 5] Train Loss: 3.4932
+[Epoch 5] Mortality - AUROC: 0.7869, AUPRC: 0.4592, F1: 0.1840, Recall: 1.0000, Precision: 0.1013
+[Epoch 5] LOS - AUROC: 0.9949, AUPRC: 0.9898, F1: 0.5511, Recall: 1.0000, Precision: 0.3804
+[Epoch 5] Mechanical Ventilation - AUROC: 0.8699, AUPRC: 0.9807, F1: 0.9475, Recall: 1.0000, Precision: 0.9002
+[Beta 0.3 | Epoch 6] Train Loss: 3.4933
+[Epoch 6] Mortality - AUROC: 0.7839, AUPRC: 0.4583, F1: 0.1840, Recall: 1.0000, Precision: 0.1013
+[Epoch 6] LOS - AUROC: 0.9959, AUPRC: 0.9931, F1: 0.5511, Recall: 1.0000, Precision: 0.3804
+[Epoch 6] Mechanical Ventilation - AUROC: 0.8690, AUPRC: 0.9807, F1: 0.9475, Recall: 1.0000, Precision: 0.9002
+[Beta 0.3 | Epoch 7] Train Loss: 3.4925
+[Epoch 7] Mortality - AUROC: 0.7899, AUPRC: 0.4632, F1: 0.1840, Recall: 1.0000, Precision: 0.1013
+[Epoch 7] LOS - AUROC: 0.9940, AUPRC: 0.9882, F1: 0.5511, Recall: 1.0000, Precision: 0.3804
+[Epoch 7] Mechanical Ventilation - AUROC: 0.8711, AUPRC: 0.9809, F1: 0.9475, Recall: 1.0000, Precision: 0.9002
+[Beta 0.3 | Epoch 8] Train Loss: 3.4919
+[Epoch 8] Mortality - AUROC: 0.7841, AUPRC: 0.4554, F1: 0.1840, Recall: 1.0000, Precision: 0.1013
+[Epoch 8] LOS - AUROC: 0.9967, AUPRC: 0.9930, F1: 0.5511, Recall: 1.0000, Precision: 0.3804
+[Epoch 8] Mechanical Ventilation - AUROC: 0.8678, AUPRC: 0.9804, F1: 0.9475, Recall: 1.0000, Precision: 0.9002
+[Beta 0.3 | Epoch 9] Train Loss: 3.4915
+[Epoch 9] Mortality - AUROC: 0.7826, AUPRC: 0.4584, F1: 0.1840, Recall: 1.0000, Precision: 0.1013
+[Epoch 9] LOS - AUROC: 0.9968, AUPRC: 0.9944, F1: 0.5511, Recall: 1.0000, Precision: 0.3804
+[Epoch 9] Mechanical Ventilation - AUROC: 0.8707, AUPRC: 0.9809, F1: 0.9475, Recall: 1.0000, Precision: 0.9002
+[Beta 0.3 | Epoch 10] Train Loss: 3.4911
+[Epoch 10] Mortality - AUROC: 0.7884, AUPRC: 0.4640, F1: 0.1840, Recall: 1.0000, Precision: 0.1013
+[Epoch 10] LOS - AUROC: 0.9946, AUPRC: 0.9897, F1: 0.5511, Recall: 1.0000, Precision: 0.3804
+[Epoch 10] Mechanical Ventilation - AUROC: 0.8742, AUPRC: 0.9814, F1: 0.9475, Recall: 1.0000, Precision: 0.9002
+[Beta 0.3 | Epoch 11] Train Loss: 3.4907
+[Epoch 11] Mortality - AUROC: 0.7863, AUPRC: 0.4615, F1: 0.1840, Recall: 1.0000, Precision: 0.1013
+[Epoch 11] LOS - AUROC: 0.9951, AUPRC: 0.9917, F1: 0.5511, Recall: 1.0000, Precision: 0.3804
+[Epoch 11] Mechanical Ventilation - AUROC: 0.8758, AUPRC: 0.9817, F1: 0.9475, Recall: 1.0000, Precision: 0.9002
+[Beta 0.3 | Epoch 12] Train Loss: 3.4905
+[Epoch 12] Mortality - AUROC: 0.7889, AUPRC: 0.4604, F1: 0.1840, Recall: 1.0000, Precision: 0.1013
+[Epoch 12] LOS - AUROC: 0.9953, AUPRC: 0.9918, F1: 0.5511, Recall: 1.0000, Precision: 0.3804
+[Epoch 12] Mechanical Ventilation - AUROC: 0.8736, AUPRC: 0.9812, F1: 0.9475, Recall: 1.0000, Precision: 0.9002
+[Beta 0.3 | Epoch 13] Train Loss: 3.4901
+[Epoch 13] Mortality - AUROC: 0.7945, AUPRC: 0.4621, F1: 0.1840, Recall: 1.0000, Precision: 0.1013
+[Epoch 13] LOS - AUROC: 0.9950, AUPRC: 0.9897, F1: 0.5511, Recall: 1.0000, Precision: 0.3804
+[Epoch 13] Mechanical Ventilation - AUROC: 0.8745, AUPRC: 0.9812, F1: 0.9475, Recall: 1.0000, Precision: 0.9002
+[Beta 0.3 | Epoch 14] Train Loss: 3.4899
+[Epoch 14] Mortality - AUROC: 0.7911, AUPRC: 0.4600, F1: 0.1840, Recall: 1.0000, Precision: 0.1013
+[Epoch 14] LOS - AUROC: 0.9936, AUPRC: 0.9887, F1: 0.5511, Recall: 1.0000, Precision: 0.3804
+[Epoch 14] Mechanical Ventilation - AUROC: 0.8797, AUPRC: 0.9822, F1: 0.9475, Recall: 1.0000, Precision: 0.9002
+[Beta 0.3 | Epoch 15] Train Loss: 3.4893
+[Epoch 15] Mortality - AUROC: 0.7861, AUPRC: 0.4584, F1: 0.1840, Recall: 1.0000, Precision: 0.1013
+[Epoch 15] LOS - AUROC: 0.9966, AUPRC: 0.9941, F1: 0.5511, Recall: 1.0000, Precision: 0.3804
+[Epoch 15] Mechanical Ventilation - AUROC: 0.8739, AUPRC: 0.9813, F1: 0.9475, Recall: 1.0000, Precision: 0.9002
+[Beta 0.3 | Epoch 16] Train Loss: 3.4896
+[Epoch 16] Mortality - AUROC: 0.8036, AUPRC: 0.4768, F1: 0.1840, Recall: 1.0000, Precision: 0.1013
+[Epoch 16] LOS - AUROC: 0.9886, AUPRC: 0.9740, F1: 0.5511, Recall: 1.0000, Precision: 0.3804
+[Epoch 16] Mechanical Ventilation - AUROC: 0.8787, AUPRC: 0.9820, F1: 0.9475, Recall: 1.0000, Precision: 0.9002
+[Beta 0.3 | Epoch 17] Train Loss: 3.4894
+[Epoch 17] Mortality - AUROC: 0.7876, AUPRC: 0.4641, F1: 0.1840, Recall: 1.0000, Precision: 0.1013
+[Epoch 17] LOS - AUROC: 0.9956, AUPRC: 0.9915, F1: 0.5511, Recall: 1.0000, Precision: 0.3804
+[Epoch 17] Mechanical Ventilation - AUROC: 0.8739, AUPRC: 0.9813, F1: 0.9475, Recall: 1.0000, Precision: 0.9002
+[Beta 0.3 | Epoch 18] Train Loss: 3.4888
+[Epoch 18] Mortality - AUROC: 0.7953, AUPRC: 0.4680, F1: 0.1840, Recall: 1.0000, Precision: 0.1013
+[Epoch 18] LOS - AUROC: 0.9926, AUPRC: 0.9857, F1: 0.5511, Recall: 1.0000, Precision: 0.3804
+[Epoch 18] Mechanical Ventilation - AUROC: 0.8810, AUPRC: 0.9823, F1: 0.9475, Recall: 1.0000, Precision: 0.9002
+[Beta 0.3 | Epoch 19] Train Loss: 3.4883
+[Epoch 19] Mortality - AUROC: 0.7959, AUPRC: 0.4708, F1: 0.1840, Recall: 1.0000, Precision: 0.1013
+[Epoch 19] LOS - AUROC: 0.9909, AUPRC: 0.9817, F1: 0.5511, Recall: 1.0000, Precision: 0.3804
+[Epoch 19] Mechanical Ventilation - AUROC: 0.8829, AUPRC: 0.9826, F1: 0.9475, Recall: 1.0000, Precision: 0.9002
+[Beta 0.3 | Epoch 20] Train Loss: 3.4881
+[Epoch 20] Mortality - AUROC: 0.7917, AUPRC: 0.4630, F1: 0.1840, Recall: 1.0000, Precision: 0.1013
+[Epoch 20] LOS - AUROC: 0.9943, AUPRC: 0.9883, F1: 0.5511, Recall: 1.0000, Precision: 0.3804
+[Epoch 20] Mechanical Ventilation - AUROC: 0.8784, AUPRC: 0.9819, F1: 0.9475, Recall: 1.0000, Precision: 0.9002
+
+Training with beta = 0.4
+[Beta 0.4 | Epoch 1] Train Loss: 3.4887
+[Epoch 1] Mortality - AUROC: 0.7980, AUPRC: 0.4678, F1: 0.1840, Recall: 1.0000, Precision: 0.1013
+[Epoch 1] LOS - AUROC: 0.9921, AUPRC: 0.9830, F1: 0.5511, Recall: 1.0000, Precision: 0.3804
+[Epoch 1] Mechanical Ventilation - AUROC: 0.8826, AUPRC: 0.9824, F1: 0.9475, Recall: 1.0000, Precision: 0.9002
+[Beta 0.4 | Epoch 2] Train Loss: 3.4875
+[Epoch 2] Mortality - AUROC: 0.7873, AUPRC: 0.4596, F1: 0.1840, Recall: 1.0000, Precision: 0.1013
+[Epoch 2] LOS - AUROC: 0.9950, AUPRC: 0.9915, F1: 0.5511, Recall: 1.0000, Precision: 0.3804
+[Epoch 2] Mechanical Ventilation - AUROC: 0.8817, AUPRC: 0.9824, F1: 0.9475, Recall: 1.0000, Precision: 0.9002
+[Beta 0.4 | Epoch 3] Train Loss: 3.4873
+[Epoch 3] Mortality - AUROC: 0.7927, AUPRC: 0.4648, F1: 0.1840, Recall: 1.0000, Precision: 0.1013
+[Epoch 3] LOS - AUROC: 0.9940, AUPRC: 0.9884, F1: 0.5511, Recall: 1.0000, Precision: 0.3804
+[Epoch 3] Mechanical Ventilation - AUROC: 0.8823, AUPRC: 0.9824, F1: 0.9475, Recall: 1.0000, Precision: 0.9002
+[Beta 0.4 | Epoch 4] Train Loss: 3.4872
+[Epoch 4] Mortality - AUROC: 0.7999, AUPRC: 0.4746, F1: 0.1840, Recall: 1.0000, Precision: 0.1013
+[Epoch 4] LOS - AUROC: 0.9920, AUPRC: 0.9808, F1: 0.5511, Recall: 1.0000, Precision: 0.3804
+[Epoch 4] Mechanical Ventilation - AUROC: 0.8793, AUPRC: 0.9819, F1: 0.9475, Recall: 1.0000, Precision: 0.9002
+[Beta 0.4 | Epoch 5] Train Loss: 3.4869
+[Epoch 5] Mortality - AUROC: 0.7958, AUPRC: 0.4697, F1: 0.1840, Recall: 1.0000, Precision: 0.1013
+[Epoch 5] LOS - AUROC: 0.9935, AUPRC: 0.9869, F1: 0.5511, Recall: 1.0000, Precision: 0.3804
+[Epoch 5] Mechanical Ventilation - AUROC: 0.8840, AUPRC: 0.9827, F1: 0.9475, Recall: 1.0000, Precision: 0.9002
+[Beta 0.4 | Epoch 6] Train Loss: 3.4861
+[Epoch 6] Mortality - AUROC: 0.7926, AUPRC: 0.4628, F1: 0.1840, Recall: 1.0000, Precision: 0.1013
+[Epoch 6] LOS - AUROC: 0.9947, AUPRC: 0.9887, F1: 0.5511, Recall: 1.0000, Precision: 0.3804
+[Epoch 6] Mechanical Ventilation - AUROC: 0.8804, AUPRC: 0.9821, F1: 0.9475, Recall: 1.0000, Precision: 0.9002
+[Beta 0.4 | Epoch 7] Train Loss: 3.4861
+[Epoch 7] Mortality - AUROC: 0.7953, AUPRC: 0.4666, F1: 0.1840, Recall: 1.0000, Precision: 0.1013
+[Epoch 7] LOS - AUROC: 0.9941, AUPRC: 0.9884, F1: 0.5511, Recall: 1.0000, Precision: 0.3804
+[Epoch 7] Mechanical Ventilation - AUROC: 0.8824, AUPRC: 0.9824, F1: 0.9475, Recall: 1.0000, Precision: 0.9002
+[Beta 0.4 | Epoch 8] Train Loss: 3.4861
+[Epoch 8] Mortality - AUROC: 0.7917, AUPRC: 0.4639, F1: 0.1840, Recall: 1.0000, Precision: 0.1013
+[Epoch 8] LOS - AUROC: 0.9960, AUPRC: 0.9920, F1: 0.5511, Recall: 1.0000, Precision: 0.3804
+[Epoch 8] Mechanical Ventilation - AUROC: 0.8807, AUPRC: 0.9821, F1: 0.9475, Recall: 1.0000, Precision: 0.9002
+[Beta 0.4 | Epoch 9] Train Loss: 3.4858
+[Epoch 9] Mortality - AUROC: 0.7977, AUPRC: 0.4707, F1: 0.1840, Recall: 1.0000, Precision: 0.1013
+[Epoch 9] LOS - AUROC: 0.9931, AUPRC: 0.9845, F1: 0.5511, Recall: 1.0000, Precision: 0.3804
+[Epoch 9] Mechanical Ventilation - AUROC: 0.8835, AUPRC: 0.9825, F1: 0.9475, Recall: 1.0000, Precision: 0.9002
+[Beta 0.4 | Epoch 10] Train Loss: 3.4835
+[Epoch 10] Mortality - AUROC: 0.7993, AUPRC: 0.4723, F1: 0.1840, Recall: 1.0000, Precision: 0.1013
+[Epoch 10] LOS - AUROC: 0.9928, AUPRC: 0.9843, F1: 0.5511, Recall: 1.0000, Precision: 0.3804
+[Epoch 10] Mechanical Ventilation - AUROC: 0.8844, AUPRC: 0.9826, F1: 0.9475, Recall: 1.0000, Precision: 0.9002
+[Beta 0.4 | Epoch 11] Train Loss: 3.4834
+[Epoch 11] Mortality - AUROC: 0.7980, AUPRC: 0.4718, F1: 0.1840, Recall: 1.0000, Precision: 0.1013
+[Epoch 11] LOS - AUROC: 0.9935, AUPRC: 0.9862, F1: 0.5511, Recall: 1.0000, Precision: 0.3804
+[Epoch 11] Mechanical Ventilation - AUROC: 0.8839, AUPRC: 0.9826, F1: 0.9475, Recall: 1.0000, Precision: 0.9002
+[Beta 0.4 | Epoch 12] Train Loss: 3.4835
+[Epoch 12] Mortality - AUROC: 0.7999, AUPRC: 0.4736, F1: 0.1840, Recall: 1.0000, Precision: 0.1013
+[Epoch 12] LOS - AUROC: 0.9927, AUPRC: 0.9841, F1: 0.5511, Recall: 1.0000, Precision: 0.3804
+[Epoch 12] Mechanical Ventilation - AUROC: 0.8845, AUPRC: 0.9827, F1: 0.9475, Recall: 1.0000, Precision: 0.9002
+[Beta 0.4 | Epoch 13] Train Loss: 3.4836
+[Epoch 13] Mortality - AUROC: 0.8004, AUPRC: 0.4741, F1: 0.1840, Recall: 1.0000, Precision: 0.1013
+[Epoch 13] LOS - AUROC: 0.9927, AUPRC: 0.9839, F1: 0.5511, Recall: 1.0000, Precision: 0.3804
+[Epoch 13] Mechanical Ventilation - AUROC: 0.8841, AUPRC: 0.9826, F1: 0.9475, Recall: 1.0000, Precision: 0.9002
+[Beta 0.4 | Epoch 14] Train Loss: 3.4834
+[Epoch 14] Mortality - AUROC: 0.7997, AUPRC: 0.4733, F1: 0.1840, Recall: 1.0000, Precision: 0.1013
+[Epoch 14] LOS - AUROC: 0.9930, AUPRC: 0.9847, F1: 0.5511, Recall: 1.0000, Precision: 0.3804
+[Epoch 14] Mechanical Ventilation - AUROC: 0.8841, AUPRC: 0.9826, F1: 0.9475, Recall: 1.0000, Precision: 0.9002
+[Beta 0.4 | Epoch 15] Train Loss: 3.4829
+[Epoch 15] Mortality - AUROC: 0.7988, AUPRC: 0.4723, F1: 0.1840, Recall: 1.0000, Precision: 0.1013
+[Epoch 15] LOS - AUROC: 0.9934, AUPRC: 0.9857, F1: 0.5511, Recall: 1.0000, Precision: 0.3804
+[Epoch 15] Mechanical Ventilation - AUROC: 0.8838, AUPRC: 0.9826, F1: 0.9475, Recall: 1.0000, Precision: 0.9002
+[Beta 0.4 | Epoch 16] Train Loss: 3.4832
+[Epoch 16] Mortality - AUROC: 0.7983, AUPRC: 0.4718, F1: 0.1840, Recall: 1.0000, Precision: 0.1013
+[Epoch 16] LOS - AUROC: 0.9935, AUPRC: 0.9862, F1: 0.5511, Recall: 1.0000, Precision: 0.3804
+[Epoch 16] Mechanical Ventilation - AUROC: 0.8838, AUPRC: 0.9826, F1: 0.9475, Recall: 1.0000, Precision: 0.9002
+[Beta 0.4 | Epoch 17] Train Loss: 3.4831
+[Epoch 17] Mortality - AUROC: 0.7985, AUPRC: 0.4720, F1: 0.1840, Recall: 1.0000, Precision: 0.1013
+[Epoch 17] LOS - AUROC: 0.9934, AUPRC: 0.9860, F1: 0.5511, Recall: 1.0000, Precision: 0.3804
+[Epoch 17] Mechanical Ventilation - AUROC: 0.8839, AUPRC: 0.9826, F1: 0.9475, Recall: 1.0000, Precision: 0.9002
+[Beta 0.4 | Epoch 18] Train Loss: 3.4831
+[Epoch 18] Mortality - AUROC: 0.7989, AUPRC: 0.4725, F1: 0.1840, Recall: 1.0000, Precision: 0.1013
+[Epoch 18] LOS - AUROC: 0.9932, AUPRC: 0.9854, F1: 0.5511, Recall: 1.0000, Precision: 0.3804
+[Epoch 18] Mechanical Ventilation - AUROC: 0.8842, AUPRC: 0.9826, F1: 0.9475, Recall: 1.0000, Precision: 0.9002
+[Beta 0.4 | Epoch 19] Train Loss: 3.4831
+[Epoch 19] Mortality - AUROC: 0.7988, AUPRC: 0.4724, F1: 0.1840, Recall: 1.0000, Precision: 0.1013
+[Epoch 19] LOS - AUROC: 0.9932, AUPRC: 0.9855, F1: 0.5511, Recall: 1.0000, Precision: 0.3804
+[Epoch 19] Mechanical Ventilation - AUROC: 0.8842, AUPRC: 0.9826, F1: 0.9475, Recall: 1.0000, Precision: 0.9002
+[Beta 0.4 | Epoch 20] Train Loss: 3.4831
+[Epoch 20] Mortality - AUROC: 0.7985, AUPRC: 0.4721, F1: 0.1840, Recall: 1.0000, Precision: 0.1013
+[Epoch 20] LOS - AUROC: 0.9933, AUPRC: 0.9859, F1: 0.5511, Recall: 1.0000, Precision: 0.3804
+[Epoch 20] Mechanical Ventilation - AUROC: 0.8840, AUPRC: 0.9826, F1: 0.9475, Recall: 1.0000, Precision: 0.9002
+No improvement for 5 consecutive epochs. Early stopping for beta = 0.4.
+
+Training with beta = 0.5
+[Beta 0.5 | Epoch 1] Train Loss: 3.4964
+[Epoch 1] Mortality - AUROC: 0.8013, AUPRC: 0.4754, F1: 0.1840, Recall: 1.0000, Precision: 0.1013
+[Epoch 1] LOS - AUROC: 0.9915, AUPRC: 0.9820, F1: 0.5511, Recall: 1.0000, Precision: 0.3804
+[Epoch 1] Mechanical Ventilation - AUROC: 0.8858, AUPRC: 0.9829, F1: 0.9475, Recall: 1.0000, Precision: 0.9002
+[Beta 0.5 | Epoch 2] Train Loss: 3.4849
+[Epoch 2] Mortality - AUROC: 0.8050, AUPRC: 0.4800, F1: 0.1840, Recall: 1.0000, Precision: 0.1013
+[Epoch 2] LOS - AUROC: 0.9897, AUPRC: 0.9768, F1: 0.5511, Recall: 1.0000, Precision: 0.3804
+[Epoch 2] Mechanical Ventilation - AUROC: 0.8869, AUPRC: 0.9830, F1: 0.9475, Recall: 1.0000, Precision: 0.9002
+[Beta 0.5 | Epoch 3] Train Loss: 3.4836
+[Epoch 3] Mortality - AUROC: 0.8060, AUPRC: 0.4812, F1: 0.1840, Recall: 1.0000, Precision: 0.1013
+[Epoch 3] LOS - AUROC: 0.9893, AUPRC: 0.9754, F1: 0.5511, Recall: 1.0000, Precision: 0.3804
+[Epoch 3] Mechanical Ventilation - AUROC: 0.8871, AUPRC: 0.9830, F1: 0.9475, Recall: 1.0000, Precision: 0.9002
+[Beta 0.5 | Epoch 4] Train Loss: 3.4835
+[Epoch 4] Mortality - AUROC: 0.8058, AUPRC: 0.4806, F1: 0.1840, Recall: 1.0000, Precision: 0.1013
+[Epoch 4] LOS - AUROC: 0.9894, AUPRC: 0.9758, F1: 0.5511, Recall: 1.0000, Precision: 0.3804
+[Epoch 4] Mechanical Ventilation - AUROC: 0.8869, AUPRC: 0.9830, F1: 0.9475, Recall: 1.0000, Precision: 0.9002
+[Beta 0.5 | Epoch 5] Train Loss: 3.4832
+[Epoch 5] Mortality - AUROC: 0.8059, AUPRC: 0.4806, F1: 0.1840, Recall: 1.0000, Precision: 0.1013
+[Epoch 5] LOS - AUROC: 0.9894, AUPRC: 0.9756, F1: 0.5511, Recall: 1.0000, Precision: 0.3804
+[Epoch 5] Mechanical Ventilation - AUROC: 0.8869, AUPRC: 0.9830, F1: 0.9475, Recall: 1.0000, Precision: 0.9002
+[Beta 0.5 | Epoch 6] Train Loss: 3.4836
+[Epoch 6] Mortality - AUROC: 0.8055, AUPRC: 0.4799, F1: 0.1840, Recall: 1.0000, Precision: 0.1013
+[Epoch 6] LOS - AUROC: 0.9897, AUPRC: 0.9763, F1: 0.5511, Recall: 1.0000, Precision: 0.3804
+[Epoch 6] Mechanical Ventilation - AUROC: 0.8866, AUPRC: 0.9829, F1: 0.9475, Recall: 1.0000, Precision: 0.9002
+[Beta 0.5 | Epoch 7] Train Loss: 3.4835
+[Epoch 7] Mortality - AUROC: 0.8052, AUPRC: 0.4795, F1: 0.1840, Recall: 1.0000, Precision: 0.1013
+[Epoch 7] LOS - AUROC: 0.9898, AUPRC: 0.9766, F1: 0.5511, Recall: 1.0000, Precision: 0.3804
+[Epoch 7] Mechanical Ventilation - AUROC: 0.8866, AUPRC: 0.9829, F1: 0.9475, Recall: 1.0000, Precision: 0.9002
+[Beta 0.5 | Epoch 8] Train Loss: 3.4834
+[Epoch 8] Mortality - AUROC: 0.8054, AUPRC: 0.4794, F1: 0.1840, Recall: 1.0000, Precision: 0.1013
+[Epoch 8] LOS - AUROC: 0.9898, AUPRC: 0.9765, F1: 0.5511, Recall: 1.0000, Precision: 0.3804
+[Epoch 8] Mechanical Ventilation - AUROC: 0.8865, AUPRC: 0.9829, F1: 0.9475, Recall: 1.0000, Precision: 0.9002
+[Beta 0.5 | Epoch 9] Train Loss: 3.4837
+[Epoch 9] Mortality - AUROC: 0.8052, AUPRC: 0.4791, F1: 0.1840, Recall: 1.0000, Precision: 0.1013
+[Epoch 9] LOS - AUROC: 0.9898, AUPRC: 0.9766, F1: 0.5511, Recall: 1.0000, Precision: 0.3804
+[Epoch 9] Mechanical Ventilation - AUROC: 0.8864, AUPRC: 0.9829, F1: 0.9475, Recall: 1.0000, Precision: 0.9002
+[Beta 0.5 | Epoch 10] Train Loss: 3.4833
+[Epoch 10] Mortality - AUROC: 0.8054, AUPRC: 0.4792, F1: 0.1840, Recall: 1.0000, Precision: 0.1013
+[Epoch 10] LOS - AUROC: 0.9898, AUPRC: 0.9763, F1: 0.5511, Recall: 1.0000, Precision: 0.3804
+[Epoch 10] Mechanical Ventilation - AUROC: 0.8865, AUPRC: 0.9829, F1: 0.9475, Recall: 1.0000, Precision: 0.9002
+No improvement for 5 consecutive epochs. Early stopping for beta = 0.5.
+Training complete.
+
+
+--- Unique Subgroups (Fixed Order) ---
+Age subgroups      : ['15-29', '30-49', '50-69', '70-89', 'Other']
+Ethnicity subgroups: ['white', 'black', 'asian', 'hispanic', 'other']
+Insurance subgroups: ['government', 'medicare', 'Medicaid', 'private', 'self pay', 'other']
+
+--- Final Evaluation Metrics ---
+Mortality:
+  AUROC     : 0.8054
+  AUPRC     : 0.4792
+  F1 Score  : 0.1840
+  Recall    : 1.0000
+  Precision : 0.1013
+LOS:
+  AUROC     : 0.9898
+  AUPRC     : 0.9763
+  F1 Score  : 0.5511
+  Recall    : 1.0000
+  Precision : 0.3804
+Mechanical Ventilation:
+  AUROC     : 0.8865
+  AUPRC     : 0.9829
+  F1 Score  : 0.9475
+  Recall    : 1.0000
+  Precision : 0.9002
+
+--- Final Detailed EDDI Statistics ---
+
+Task: Mortality
+  Aggregated Age EDDI    : 0.0207
+  Age Subgroup EDDI:
+    15-29: 0.0598
+    30-49: 0.0381
+    50-69: 0.0141
+    70-89: -0.0403
+    Other: 0.0000
+  Aggregated Ethnicity EDDI: 0.0299
+  Ethnicity Subgroup EDDI:
+    white: 0.0425
+    black: 0.1013
+    asian: -0.0027
+    hispanic: 0.1013
+    other: -0.0001
+  Aggregated Insurance EDDI: 0.0153
+  Insurance Subgroup EDDI:
+    government: 0.0485
+    medicare: 0.0155
+    Medicaid: -0.0262
+    private: 0.0306
+    self pay: -0.0406
+    other: 0.0000
+  Final Overall Mortality EDDI: 0.0132
+
+Task: Los
+  Aggregated Age EDDI    : 0.0209
+  Age Subgroup EDDI:
+    15-29: 0.0665
+    30-49: 0.0395
+    50-69: 0.0040
+    70-89: -0.0314
+    Other: 0.0000
+  Aggregated Ethnicity EDDI: 0.0779
+  Ethnicity Subgroup EDDI:
+    white: 0.0274
+    black: 0.3804
+    asian: 0.0490
+    hispanic: 0.0622
+    other: -0.0009
+  Aggregated Insurance EDDI: 0.0209
+  Insurance Subgroup EDDI:
+    government: 0.0408
+    medicare: 0.0097
+    Medicaid: -0.0286
+    private: 0.0313
+    self pay: 0.0856
+    other: 0.0000
+  Final Overall Los EDDI: 0.0278
+
+Task: Mechanical_ventilation
+  Aggregated Age EDDI    : 0.0359
+  Age Subgroup EDDI:
+    15-29: 0.1256
+    30-49: 0.0596
+    50-69: -0.0096
+    70-89: -0.0346
+    Other: 0.0000
+  Aggregated Ethnicity EDDI: 0.0818
+  Ethnicity Subgroup EDDI:
+    white: 0.0179
+    black: 0.4002
+    asian: 0.0563
+    hispanic: 0.0593
+    other: -0.0010
+  Aggregated Insurance EDDI: 0.0224
+  Insurance Subgroup EDDI:
+    government: 0.0559
+    medicare: 0.0487
+    Medicaid: -0.0242
+    private: 0.0147
+    self pay: 0.0792
+    other: 0.0000
+  Final Overall Mechanical_ventilation EDDI: 0.0307
+
+Training complete.
