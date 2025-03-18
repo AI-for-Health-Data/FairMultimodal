@@ -26,7 +26,6 @@ DEBUG = True
 
 
 # Loss Function and Utility Functions
-
 class FocalLoss(nn.Module):
     def __init__(self, gamma=2, alpha=None, reduction='mean', pos_weight=None):
         super(FocalLoss, self).__init__()
@@ -94,18 +93,6 @@ def map_insurance(code):
 
 # EDDI Calculation Function
 def compute_eddi(true_labels, predicted_labels, sensitive_labels, threshold=0.5):
-    """
-    Computes the EDDI for a given sensitive attribute.
-    It first converts predicted probabilities to binary predictions using the given threshold,
-    then computes the overall error rate and for each subgroup computes the subgroup error rate.
-    The subgroup disparity is the difference between subgroup error and overall error.
-    Finally, the attribute-level EDDI is computed as the square root of the sum of the squared subgroup
-    disparities divided by the number of groups.
-    
-    Returns:
-      eddi_attr: the attribute-level EDDI.
-      subgroup_eddi: dictionary mapping subgroup -> disparity value.
-    """
     preds = (predicted_labels > threshold).astype(int)
     overall_error = np.mean(preds != true_labels)
     unique_groups = np.unique(sensitive_labels)
@@ -167,7 +154,6 @@ def apply_bioclinicalbert_on_patient_notes(df, note_columns, tokenizer, model, d
     aggregated_embeddings = np.vstack(aggregated_embeddings)
     return aggregated_embeddings
 
-
 # BEHRT Model for Structured Data
 class BEHRTModel(nn.Module):
     def __init__(self, num_diseases, num_ages, num_segments, num_admission_locs, num_discharge_locs, 
@@ -219,7 +205,6 @@ class BEHRTModel(nn.Module):
         cls_embedding = cls_token + extra
         return cls_embedding
 
-
 # Multimodal Transformer Model
 class MultimodalTransformer(nn.Module):
     def __init__(self, text_embed_size, BEHRT, device, hidden_size=512):
@@ -261,7 +246,7 @@ class MultimodalTransformer(nn.Module):
 
 
 # Training and Evaluation Functions
-def train_step(model, dataloader, optimizer, device, criterion):
+def train_step(model, dataloader, optimizer, device, crit_mort, crit_los, crit_vent):
     model.train()
     running_loss = 0.0
     for batch in dataloader:
@@ -278,9 +263,9 @@ def train_step(model, dataloader, optimizer, device, criterion):
             gender_ids, ethnicity_ids, insurance_ids,
             aggregated_text_embedding
         )
-        loss_mort = criterion(mortality_logits, labels_mortality.unsqueeze(1))
-        loss_los = criterion(los_logits, labels_los.unsqueeze(1))
-        loss_vent = criterion(vent_logits, labels_vent.unsqueeze(1))
+        loss_mort = crit_mort(mortality_logits, labels_mortality.unsqueeze(1))
+        loss_los = crit_los(los_logits, labels_los.unsqueeze(1))
+        loss_vent = crit_vent(vent_logits, labels_vent.unsqueeze(1))
         loss = loss_mort + loss_los + loss_vent
         loss.backward()
         optimizer.step()
@@ -422,7 +407,6 @@ def evaluate_model(model, dataloader, device, threshold=0.5, print_eddi=False):
 
 
 # Training Pipeline Function
-
 def train_pipeline():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("Using device:", device)
@@ -441,6 +425,7 @@ def train_pipeline():
         errors='ignore',
         inplace=True
     )
+    
     merged_df = pd.merge(
         structured_data,
         unstructured_data,
@@ -452,7 +437,6 @@ def train_pipeline():
         raise ValueError("Merged DataFrame is empty. Check your data and merge keys.")
 
     merged_df.columns = [col.lower().strip() for col in merged_df.columns]
-    # Rename 'age_struct' to 'age' if present.
     if "age_struct" in merged_df.columns:
         merged_df.rename(columns={"age_struct": "age"}, inplace=True)
     # Ensure 'age' column exists
@@ -486,7 +470,6 @@ def train_pipeline():
     if "segment" not in df_unique.columns:
         df_unique["segment"] = 0
 
-    # Compute Aggregated Text Embeddings
     tokenizer = AutoTokenizer.from_pretrained("emilyalsentzer/Bio_ClinicalBERT")
     from transformers import BertModel  # in case not already imported
     bioclinical_bert_base = BertModel.from_pretrained("emilyalsentzer/Bio_ClinicalBERT")
@@ -514,13 +497,11 @@ def train_pipeline():
     print("Number of lab feature columns:", len(lab_feature_columns))
     df_unique[lab_feature_columns] = df_unique[lab_feature_columns].fillna(0)
 
-    # Create Tensors for Model Input using df_unique
     num_samples = len(df_unique)
     dummy_input_ids = torch.zeros((num_samples, 1), dtype=torch.long)
     dummy_attn_mask = torch.ones((num_samples, 1), dtype=torch.long)
 
     age_ids = torch.tensor(df_unique["age"].values, dtype=torch.long)
-    # Use the segment column that we ensured exists
     segment_ids = torch.tensor(df_unique["segment"].values, dtype=torch.long)
     admission_loc_ids = torch.tensor(df_unique["first_wardid"].values, dtype=torch.long)
     discharge_loc_ids = torch.tensor(df_unique["last_wardid"].values, dtype=torch.long)
@@ -532,10 +513,13 @@ def train_pipeline():
     labels_los = torch.tensor(df_unique["los_binary"].values, dtype=torch.float32)
     labels_vent = torch.tensor(df_unique["mechanical_ventilation"].values, dtype=torch.float32)
 
-
-    mortality_pos_weight = get_pos_weight(df_unique["short_term_mortality"], device)
-    criterion = FocalLoss(gamma=2, pos_weight=mortality_pos_weight, reduction='mean')
-
+    mortality_pos_weight = get_pos_weight(df_filtered["short_term_mortality"], device)
+    los_pos_weight = get_pos_weight(df_filtered["los_binary"], device)
+    mech_pos_weight = get_pos_weight(df_filtered["mechanical_ventilation"], device)
+    criterion_mortality = FocalLoss(gamma=1, pos_weight=mortality_pos_weight, reduction='mean')
+    criterion_los = FocalLoss(gamma=1, pos_weight=los_pos_weight, reduction='mean')
+    criterion_mech = FocalLoss(gamma=1, pos_weight=mech_pos_weight, reduction='mean')
+    
     dataset = TensorDataset(
         dummy_input_ids, dummy_attn_mask,
         age_ids, segment_ids, admission_loc_ids, discharge_loc_ids,
@@ -565,6 +549,7 @@ def train_pipeline():
     print("NUM_ETHNICITIES:", NUM_ETHNICITIES)
     print("NUM_INSURANCES:", NUM_INSURANCES)
 
+  
     behrt_model = BEHRTModel(
         num_diseases=NUM_DISEASES,
         num_ages=NUM_AGES,
@@ -590,7 +575,8 @@ def train_pipeline():
     num_epochs = 20
     for epoch in range(num_epochs):
         multimodal_model.train()
-        running_loss = train_step(multimodal_model, dataloader, optimizer, device, criterion)
+        running_loss = train_step(multimodal_model, dataloader, optimizer, device,
+                                  criterion_mortality, criterion_los, criterion_mech)
         epoch_loss = running_loss / len(dataloader)
         print(f"[Epoch {epoch+1}] Train Loss: {epoch_loss:.4f}")
         scheduler.step(epoch_loss)
