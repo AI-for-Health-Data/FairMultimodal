@@ -1,10 +1,5 @@
 import os
 import sys
-# Remove current directory from sys.path to avoid conflicts with local modules named like standard ones.
-current_dir = os.getcwd()
-if current_dir in sys.path:
-    sys.path.remove(current_dir)
-
 import time
 import random
 import argparse
