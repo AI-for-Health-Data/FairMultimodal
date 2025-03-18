@@ -1,0 +1,151 @@
+Using device: cuda
+After filtering, number of rows: 33721
+Column first_wardid not found in filtered dataframe; creating default values.
+Column last_wardid not found in filtered dataframe; creating default values.
+Number of unique patients: 33721
+Number of lab feature columns: 544
+Positive weight: 8.868597984313965
+Positive weight: 1.6289077997207642
+Positive weight: 0.1108512356877327
+
+--- Hyperparameters based on processed data ---
+NUM_DISEASES: 33721
+NUM_AGES: 75
+NUM_SEGMENTS: 2
+NUM_ADMISSION_LOCS: 1
+NUM_DISCHARGE_LOCS: 1
+NUM_GENDERS: 2
+NUM_ETHNICITIES: 41
+NUM_INSURANCES: 5
+[Epoch 1] Train Loss: 1.0303
+[Epoch 2] Train Loss: 0.8609
+[Epoch 3] Train Loss: 0.8047
+[Epoch 4] Train Loss: 0.7692
+[Epoch 5] Train Loss: 0.7454
+[Epoch 6] Train Loss: 0.7244
+[Epoch 7] Train Loss: 0.7100
+[Epoch 8] Train Loss: 0.6919
+[Epoch 9] Train Loss: 0.6820
+[Epoch 10] Train Loss: 0.6660
+[Epoch 11] Train Loss: 0.6559
+[Epoch 12] Train Loss: 0.6429
+[Epoch 13] Train Loss: 0.6313
+[Epoch 14] Train Loss: 0.6172
+[Epoch 15] Train Loss: 0.6039
+[Epoch 16] Train Loss: 0.5940
+[Epoch 17] Train Loss: 0.5800
+[Epoch 18] Train Loss: 0.5682
+[Epoch 19] Train Loss: 0.5518
+[Epoch 20] Train Loss: 0.5426
+
+--- EDDI Calculation for Each Outcome ---
+
+Task: Mortality
+  Aggregated Age EDDI    : 0.0269
+  Age Subgroup EDDI:
+    15-29: -0.0778
+    30-49: -0.0499
+    50-69: -0.0180
+    70-89: 0.0522
+    Other: 0.0000
+  Aggregated Ethnicity EDDI: 0.0697
+  Ethnicity Subgroup EDDI:
+    white: 0.0178
+    black: 0.3414
+    asian: 0.0013
+    hispanic: -0.0677
+    other: 0.0000
+  Aggregated Insurance EDDI: 0.0221
+  Insurance Subgroup EDDI:
+    government: -0.0699
+    medicare: -0.0413
+    medicaid: 0.0438
+    private: -0.0445
+    self pay: -0.0407
+    other: 0.0000
+  Final Overall Mortality EDDI: 0.0260
+
+Task: Los
+  Aggregated Age EDDI    : 0.0091
+  Age Subgroup EDDI:
+    15-29: -0.0299
+    30-49: -0.0182
+    50-69: 0.0022
+    70-89: 0.0101
+    Other: 0.0000
+  Aggregated Ethnicity EDDI: 0.0260
+  Ethnicity Subgroup EDDI:
+    white: -0.0039
+    black: -0.1216
+    asian: 0.0345
+    hispanic: -0.0306
+    other: -0.0005
+  Aggregated Insurance EDDI: 0.0059
+  Insurance Subgroup EDDI:
+    government: -0.0140
+    medicare: -0.0014
+    medicaid: 0.0080
+    private: -0.0088
+    self pay: -0.0233
+    other: 0.0000
+  Final Overall Los EDDI: 0.0094
+
+Task: Mechanical_ventilation
+  Aggregated Age EDDI    : 0.0149
+  Age Subgroup EDDI:
+    15-29: 0.0199
+    30-49: 0.0504
+    50-69: -0.0006
+    70-89: -0.0248
+    Other: 0.0000
+  Aggregated Ethnicity EDDI: 0.0178
+  Ethnicity Subgroup EDDI:
+    white: 0.0417
+    black: 0.0123
+    asian: 0.0518
+    hispanic: 0.0577
+    other: -0.0009
+  Aggregated Insurance EDDI: 0.0209
+  Insurance Subgroup EDDI:
+    government: 0.0821
+    medicare: 0.0609
+    medicaid: -0.0198
+    private: 0.0066
+    self pay: -0.0074
+    other: 0.0000
+  Final Overall Mechanical_ventilation EDDI: 0.0104
+
+Final Evaluation Metrics:
+Mortality - AUC-ROC: 0.9710, AUPRC: 0.8448, F1: 0.5498, Recall: 0.9558, Precision: 0.3859
+Los - AUC-ROC: 0.9556, AUPRC: 0.9392, F1: 0.8476, Recall: 0.8888, Precision: 0.8101
+Mechanical_ventilation - AUC-ROC: 0.8650, AUPRC: 0.9830, F1: 0.6294, Recall: 0.4601, Precision: 0.9958
+
+Detailed EDDI Statistics:
+
+Mortality EDDI Stats:
+  Age subgroup EDDI      : {'15-29': -0.07783916285045964, '30-49': -0.0498802073791389, '50-69': -0.018037659075313822, '70-89': 0.05220502318337361}
+  Aggregated Age EDDI    : 0.0269
+  Ethnicity subgroup EDDI: {'asian': 0.0012977396577228961, 'black': 0.341374810948667, 'hispanic': -0.06771609814224208, 'other': 3.982799806498405e-05, 'white': 0.017845399183961136}
+  Aggregated Ethnicity EDDI: 0.0697
+  Insurance subgroup EDDI: {'government': -0.06994594376831413, 'medicaid': 0.04384524152607189, 'medicare': -0.04128354834520631, 'private': -0.04447820526399039, 'self pay': -0.04072125892032863}
+  Aggregated Insurance EDDI: 0.0221
+  Final Overall EDDI     : 0.0260
+
+Los EDDI Stats:
+  Age subgroup EDDI      : {'15-29': -0.029853243459785392, '30-49': -0.01822238505990309, '50-69': 0.002244659004269553, '70-89': 0.010076034353428437}
+  Aggregated Age EDDI    : 0.0091
+  Ethnicity subgroup EDDI: {'asian': 0.03451306393350537, 'black': -0.12155630022834435, 'hispanic': -0.030647209319253438, 'other': -0.0004904865345092962, 'white': -0.003909241404814939}
+  Aggregated Ethnicity EDDI: 0.0260
+  Insurance subgroup EDDI: {'government': -0.01400913041702359, 'medicaid': 0.007966510469086169, 'medicare': -0.0014455352577662922, 'private': -0.008808378246614457, 'self pay': -0.02330302511917405}
+  Aggregated Insurance EDDI: 0.0059
+  Final Overall EDDI     : 0.0094
+
+Mechanical_ventilation EDDI Stats:
+  Age subgroup EDDI      : {'15-29': 0.019904309820024613, '30-49': 0.050401679747483163, '50-69': -0.0005523597787941981, '70-89': -0.024800657769615042}
+  Aggregated Age EDDI    : 0.0149
+  Ethnicity subgroup EDDI: {'asian': 0.05176142503150788, 'black': 0.012262388422644654, 'hispanic': 0.05771693387719007, 'other': -0.0009094031220610033, 'white': 0.041674153128527014}
+  Aggregated Ethnicity EDDI: 0.0178
+  Insurance subgroup EDDI: {'government': 0.08207370917736162, 'medicaid': -0.019812423673142787, 'medicare': 0.0608951333170718, 'private': 0.0066249923235581765, 'self pay': -0.007388266599189397}
+  Aggregated Insurance EDDI: 0.0209
+  Final Overall EDDI     : 0.0104
+Training complete.
