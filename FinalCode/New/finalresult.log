@@ -1,0 +1,76 @@
+Using device: cuda
+
+--- Debug Info: Before Merge ---
+Structured data shape: (33721, 561)
+Unstructured data shape: (33721, 1037)
+After filtering, number of rows: 33721
+Computing aggregated text embeddings for each patient...
+Aggregated text embeddings shape: (33721, 768)
+Number of lab feature columns: 542
+
+--- Demographics Hyperparameters ---
+NUM_AGES: 75
+NUM_GENDERS: 2
+NUM_ETHNICITIES: 41
+NUM_INSURANCES: 5
+NUM_LAB_FEATURES (tokens): 542
+Positive weight: 8.868597984313965
+Positive weight: 1.6289077997207642
+Positive weight: 0.6497553586959839
+[Epoch 1] Train Loss: 1.5888
+[Epoch 2] Train Loss: 1.5447
+[Epoch 3] Train Loss: 1.5229
+[Epoch 4] Train Loss: 1.5042
+[Epoch 5] Train Loss: 1.4874
+[Epoch 6] Train Loss: 1.4711
+[Epoch 7] Train Loss: 1.4557
+[Epoch 8] Train Loss: 1.4403
+[Epoch 9] Train Loss: 1.4255
+[Epoch 10] Train Loss: 1.4109
+[Epoch 11] Train Loss: 1.3966
+[Epoch 12] Train Loss: 1.3827
+[Epoch 13] Train Loss: 1.3688
+[Epoch 14] Train Loss: 1.3558
+[Epoch 15] Train Loss: 1.3429
+[Epoch 16] Train Loss: 1.3305
+[Epoch 17] Train Loss: 1.3185
+[Epoch 18] Train Loss: 1.3064
+[Epoch 19] Train Loss: 1.2951
+[Epoch 20] Train Loss: 1.2840
+
+--- Fairness (EDDI) Statistics for mortality ---
+Final Overall EDDI: 0.014637452288219971
+
+--- Fairness (EDDI) Statistics for los ---
+Final Overall EDDI: 0.04481788960831953
+
+--- Fairness (EDDI) Statistics for mech_ventilation ---
+Final Overall EDDI: 0.07515500185868017
+
+--- Final Evaluation Metrics ---
+
+Outcome: mortality
+AUROC     : 0.9501
+AUPRC     : 0.7790
+F1 Score  : 0.1840
+Recall    : 1.0000
+Precision : 0.1013
+
+Outcome: los
+AUROC     : 1.0000
+AUPRC     : 1.0000
+F1 Score  : 0.5511
+Recall    : 1.0000
+Precision : 0.3804
+
+Outcome: mech_ventilation
+AUROC     : 0.9162
+AUPRC     : 0.9400
+F1 Score  : 0.7548
+Recall    : 1.0000
+Precision : 0.6062
+
+Fairness (EDDI) Statistics:
+{'mortality': {'age_eddi': 0.02303874349432696, 'age_subgroup_eddi': {'15-29': 0.06659496721432423, '30-49': 0.04244526472237898, '50-69': 0.01569132431647081, '70-90': -0.04483114335285094}, 'ethnicity_eddi': 0.033271605735689214, 'ethnicity_subgroup_eddi': {'Asian': 0.1127573917634636, 'Black': 0.1127573917634636, 'Hispanic': -0.00302083396915105, 'Other': -0.00013347250850489838, 'White': 0.047301074600906906}, 'insurance_eddi': 0.017044401878056746, 'insurance_subgroup_eddi': {'Government': 0.05397020880237497, 'Medicaid': -0.02916569456003595, 'Medicare': 0.017235123450089103, 'Private': 0.034092376577485865, 'Self Pay': -0.04516669222043413}, 'final_EDDI': 0.014637452288219971}, 'los': {'age_eddi': 0.03371999984034646, 'age_subgroup_eddi': {'15-29': 0.10735956980608724, '30-49': 0.06373149540049247, '50-69': 0.006515652319725522, '70-90': -0.05061995424380381}, 'ethnicity_eddi': 0.12572582821603942, 'ethnicity_subgroup_eddi': {'Asian': 0.10039202206810131, 'Black': 0.6139082990332154, 'Hispanic': 0.07904851592394166, 'Other': -0.0014310702381771735, 'White': 0.044293605256786474}, 'insurance_eddi': 0.033671453646221226, 'insurance_subgroup_eddi': {'Government': 0.06578849936155727, 'Medicaid': -0.046117474486224094, 'Medicare': 0.015605845497537338, 'Private': 0.05048150251450095, 'Self Pay': 0.1381929707155646}, 'final_EDDI': 0.04481788960831953}, 'mech_ventilation': {'age_eddi': 0.07970455111289551, 'age_subgroup_eddi': {'15-29': 0.2480645504148899, '30-49': 0.16921901275448603, '50-69': -0.003897909070004212, '70-90': -0.10704559002812034}, 'ethnicity_eddi': 0.20364587072579982, 'ethnicity_subgroup_eddi': {'Asian': 0.10013342821562, 'Black': 1.0, 'Hispanic': 0.10360112213386427, 'Other': -0.0018807765712459013, 'White': 0.1266000920916312}, 'insurance_eddi': 0.054863581797278106, 'insurance_subgroup_eddi': {'Government': 0.14710759517040214, 'Medicaid': -0.08349604739545181, 'Medicare': 0.10231379027947976, 'Private': 0.07417645073142734, 'Self Pay': 0.1751223091976517}, 'final_EDDI': 0.07515500185868017}}
+
+Training complete.
