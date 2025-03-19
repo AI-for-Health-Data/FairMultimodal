@@ -1,4 +1,4 @@
-Using device: cuda
+07_Multimodal-EDDI+Sigmoid FusionUsing device: cuda
 
 --- Debug Info: Before Merge ---
 Structured data shape: (33721, 561)
