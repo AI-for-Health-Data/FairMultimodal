@@ -302,10 +302,6 @@ class MultimodalTransformer_EDDI_Sigmoid(nn.Module):
         else:
             return fused_logits, adjusted
 
-# ----------------------------
-# Training and Evaluation Functions
-# ----------------------------
-
 def train_step(model, dataloader, optimizer, device,
                criterion, lambda_edd=1.0, lambda_l1=0.01, target=1.0,
                lr_weight=0.01, threshold=0.5):
@@ -337,7 +333,6 @@ def train_step(model, dataloader, optimizer, device,
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
 
-        # --- Dynamic EDDI-based Weight Update ---
         age_groups = np.array([get_age_bucket(a) for a in age_ids.cpu().numpy()])
         labels_np = labels[:, 0].cpu().numpy().astype(int)  # Using mortality (index 0) for update.
         modality_eddi = {}
@@ -438,15 +433,10 @@ def evaluate_model_multi(model, dataloader, device, threshold=0.5, print_eddi=Fa
 
     return metrics
 
-# ----------------------------
-# Training Pipeline
-# ----------------------------
-
 def train_pipeline():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("Using device:", device)
 
-    # Load structured and unstructured CSV data.
     structured_data = pd.read_csv('final_structured_common.csv', low_memory=False)
     unstructured_data = pd.read_csv("final_unstructured_common.csv", low_memory=False)
     print("\n--- Debug Info: Before Merge ---")
