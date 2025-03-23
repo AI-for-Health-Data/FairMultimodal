@@ -37,9 +37,7 @@ def get_pos_weight(labels_series, device, clip_max=10.0):
         print("Positive weight:", weight.item())
     return weight
 
-
-# Although age, ethnicity, and insurance are sensitive demographic features,they are not used as inputs for prediction in the DfC pipeline.
-#They are only preserved for fairness evaluation.
+# Sensitive Attribute (Demographic) Mapping Functions
 def get_age_bucket(age):
     if 15 <= age <= 29:
         return "15-29"
@@ -237,7 +235,6 @@ class CustomDataset(Dataset):
                 self.ethnicity_list[idx],
                 self.insurance_list[idx])
 
-
 # Training and Evaluation Functions
 def train_step(model, dataloader, optimizer, device, crit_mort, crit_los, crit_vent):
     model.train()
@@ -428,14 +425,15 @@ def train_pipeline():
         raise ValueError("Merged DataFrame is empty. Check your data and merge keys.")
 
     merged_df.columns = [col.lower().strip() for col in merged_df.columns]
-    # Rename 'age_struct' to 'age' if needed.
     if "age_struct" in merged_df.columns:
         merged_df.rename(columns={"age_struct": "age"}, inplace=True)
+    # Check for ethnicity.
     if "ethnicity" not in merged_df.columns:
         if "ethnicity_struct" in merged_df.columns:
             merged_df.rename(columns={"ethnicity_struct": "ethnicity"}, inplace=True)
         else:
             raise ValueError("No ethnicity column found. Please provide ethnicity data.")
+    # Check for insurance.
     if "insurance" not in merged_df.columns:
         if "insurance_struct" in merged_df.columns:
             merged_df.rename(columns={"insurance_struct": "insurance"}, inplace=True)
@@ -472,6 +470,7 @@ def train_pipeline():
     # Use one row per patient.
     df_unique = df_filtered.groupby("subject_id", as_index=False).first()
     print("Number of unique patients before sampling:", len(df_unique))
+    
     if "segment" not in df_unique.columns:
         df_unique["segment"] = 0
 
@@ -517,10 +516,20 @@ def train_pipeline():
         age_ids, ethnicity_list, insurance_list
     )
     
-    # Data Splitting: 80% Train / 20% Test, with 5% of Train for Validation.
+    # Data Splitting: Stratified 80% Train / 20% Test, with 5% of Train for Validation.
     indices = list(range(len(dataset)))
-    train_val_indices, test_indices = train_test_split(indices, test_size=0.2, random_state=42, shuffle=True)
-    train_indices, val_indices = train_test_split(train_val_indices, test_size=0.05, random_state=42, shuffle=True)
+    composite_labels = (
+        df_unique["short_term_mortality"].astype(str) + "_" +
+        df_unique["los_binary"].astype(str) + "_" +
+        df_unique["mechanical_ventilation"].astype(str)
+    ).values
+    train_val_indices, test_indices = train_test_split(
+        indices, test_size=0.2, random_state=42, shuffle=True, stratify=composite_labels
+    )
+    composite_train_val = composite_labels[train_val_indices]
+    train_indices, val_indices = train_test_split(
+        train_val_indices, test_size=0.05, random_state=42, shuffle=True, stratify=composite_train_val
+    )
     
     train_loader = DataLoader(Subset(dataset, train_indices), batch_size=16, shuffle=True)
     val_loader = DataLoader(Subset(dataset, val_indices), batch_size=16, shuffle=False)
