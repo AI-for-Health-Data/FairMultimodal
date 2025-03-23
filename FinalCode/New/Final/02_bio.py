@@ -39,8 +39,6 @@ class BioClinicalBERT_FT(nn.Module):
 
 # Apply BioClinicalBERT on Patient Notes
 def apply_bioclinicalbert_on_patient_notes(df, note_columns, tokenizer, model, device, aggregation="mean", max_length=512):
-    # Get unique patient IDs in the order they appear.
-    # We derive the unique list from the filtered dataframe to ensure consistency.
     patient_ids = df["subject_id"].drop_duplicates().values
     aggregated_embeddings = []
     for pid in tqdm(patient_ids, desc="Aggregating text embeddings"):
@@ -78,10 +76,6 @@ def apply_bioclinicalbert_on_patient_notes(df, note_columns, tokenizer, model, d
 # Unstructured Dataset Definition
 class UnstructuredDataset(Dataset):
     def __init__(self, embeddings, mortality_labels, los_labels, mech_labels):
-        """
-        embeddings: NumPy array of shape (num_patients, hidden_size)
-        mortality_labels, los_labels, mech_labels: arrays/lists of binary labels
-        """
         self.embeddings = torch.tensor(embeddings, dtype=torch.float32)
         self.mortality_labels = torch.tensor(mortality_labels, dtype=torch.float32).unsqueeze(1)
         self.los_labels = torch.tensor(los_labels, dtype=torch.float32).unsqueeze(1)
@@ -286,7 +280,7 @@ def train_pipeline():
     )
     print("Aggregated text embeddings shape:", aggregated_embeddings_np.shape)
     
-    # Here we ensure that df_unique is ordered exactly as in the aggregated embeddings.
+    # Use unique patients for labels and demographics.
     df_unique = df_filtered.drop_duplicates(subset="subject_id")
     df_unique = df_unique.set_index("subject_id").loc[patient_ids].reset_index()
     
@@ -477,5 +471,9 @@ def train_pipeline():
     for outcome, stats in eddi_all.items():
         print(f"{outcome.capitalize()} Overall EDDI: {stats['overall_EDDI']:.4f}")
     
+    # Optionally, save the results to CSV.
+    # df_results.to_csv("unstructured_predictions_and_fairness.csv", index=False)
+    # print("Results saved to 'unstructured_predictions_and_fairness.csv'.")
+
 if __name__ == "__main__":
     train_pipeline()
