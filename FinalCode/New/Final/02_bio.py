@@ -39,7 +39,9 @@ class BioClinicalBERT_FT(nn.Module):
 
 # Apply BioClinicalBERT on Patient Notes
 def apply_bioclinicalbert_on_patient_notes(df, note_columns, tokenizer, model, device, aggregation="mean", max_length=512):
-    patient_ids = df["subject_id"].unique()
+    # Get unique patient IDs in the order they appear.
+    # We derive the unique list from the filtered dataframe to ensure consistency.
+    patient_ids = df["subject_id"].drop_duplicates().values
     aggregated_embeddings = []
     for pid in tqdm(patient_ids, desc="Aggregating text embeddings"):
         patient_data = df[df["subject_id"] == pid]
@@ -145,7 +147,6 @@ def evaluate_model(model, dataloader, device, threshold=0.5):
     metrics = {}
     tasks = ["mortality", "los", "mech"]
     for i, task in enumerate(tasks):
-        # Compute AUROC and AUPRC (if possible)
         try:
             aucroc = roc_auc_score(all_labels[:, i], probs[:, i])
         except Exception:
@@ -154,11 +155,9 @@ def evaluate_model(model, dataloader, device, threshold=0.5):
             auprc = average_precision_score(all_labels[:, i], probs[:, i])
         except Exception:
             auprc = float('nan')
-        # Compute F1, Recall, and Precision using predictions
         f1 = f1_score(all_labels[:, i], preds[:, i], zero_division=0)
         recall_metric = recall_score(all_labels[:, i], preds[:, i], zero_division=0)
         precision = precision_score(all_labels[:, i], preds[:, i], zero_division=0)
-        # Calculate confusion matrix for TPR and FPR
         tn, fp, fn, tp = confusion_matrix(all_labels[:, i], preds[:, i]).ravel()
         tpr = tp / (tp + fn) if (tp + fn) > 0 else 0
         fpr = fp / (fp + tn) if (fp + tn) > 0 else 0
@@ -260,7 +259,7 @@ def train_pipeline():
 
     # Read the unstructured data CSV.
     df = pd.read_csv("final_unstructured_common.csv", low_memory=False)
-    print("Data shape:", df.shape)
+    print("Original data shape:", df.shape)
     
     # Identify note columns (columns starting with 'note_').
     note_columns = [col for col in df.columns if col.startswith("note_")]
@@ -287,8 +286,16 @@ def train_pipeline():
     )
     print("Aggregated text embeddings shape:", aggregated_embeddings_np.shape)
     
-    # Use unique patients for labels and demographics.
+    # Here we ensure that df_unique is ordered exactly as in the aggregated embeddings.
     df_unique = df_filtered.drop_duplicates(subset="subject_id")
+    df_unique = df_unique.set_index("subject_id").loc[patient_ids].reset_index()
+    
+    # Create a stratification label by concatenating outcome columns.
+    df_unique['strat_labels'] = (
+        df_unique['short_term_mortality'].astype(str) + "_" +
+        df_unique['los_binary'].astype(str) + "_" +
+        df_unique['mechanical_ventilation'].astype(str)
+    )
     
     # Outcome labels.
     mortality_labels = df_unique["short_term_mortality"].values
@@ -298,11 +305,30 @@ def train_pipeline():
     # Build dataset.
     full_dataset = UnstructuredDataset(aggregated_embeddings_np, mortality_labels, los_labels, mech_labels)
     
-    # Split data: 80% train and 20% test.
-    indices = list(range(len(full_dataset)))
-    train_indices, test_indices = train_test_split(indices, test_size=0.2, random_state=42, shuffle=True)
-    # From the training data, set aside 5% for validation.
-    train_indices, val_indices = train_test_split(train_indices, test_size=0.05, random_state=42, shuffle=True)
+    # Get stratification labels.
+    strat_labels = df_unique['strat_labels'].values
+
+    # Create indices for the full dataset.
+    indices = np.arange(len(full_dataset))
+    
+    # Stratified split: 80% train, 20% test.
+    train_indices, test_indices = train_test_split(
+        indices,
+        test_size=0.2,
+        random_state=42,
+        shuffle=True,
+        stratify=strat_labels
+    )
+    
+    # From the training data, set aside 5% for validation (again, stratified).
+    train_strat_labels = strat_labels[train_indices]
+    train_indices, val_indices = train_test_split(
+        train_indices,
+        test_size=0.05,
+        random_state=42,
+        shuffle=True,
+        stratify=train_strat_labels
+    )
     
     train_loader = DataLoader(Subset(full_dataset, train_indices), batch_size=16, shuffle=True)
     val_loader = DataLoader(Subset(full_dataset, val_indices), batch_size=16, shuffle=False)
@@ -381,9 +407,15 @@ def train_pipeline():
     demo_cols = ['subject_id', 'age', 'ethnicity_category', 'insurance_category']
     df_demo = df_unique[demo_cols].copy()
     
-    # Use patient_ids from the aggregated embeddings; assume they are in the same order.
+    # Use patient_ids from df_unique (which is in the same order as the dataset) for the test set.
+    test_patient_ids = df_unique['subject_id'].values[test_indices]
+    
+    # Debug: Print lengths to verify alignment.
+    print("Length of test_patient_ids:", len(test_patient_ids))
+    print("Number of probability predictions:", probs.shape[0])
+    
     df_probs = pd.DataFrame({
-        'subject_id': patient_ids,
+        'subject_id': test_patient_ids,
         'mortality_prob': probs[:, 0],
         'los_prob': probs[:, 1],
         'mech_prob': probs[:, 2]
@@ -444,6 +476,6 @@ def train_pipeline():
     print("\nAll EDDI Results:")
     for outcome, stats in eddi_all.items():
         print(f"{outcome.capitalize()} Overall EDDI: {stats['overall_EDDI']:.4f}")
-   
+    
 if __name__ == "__main__":
     train_pipeline()
