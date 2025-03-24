@@ -564,8 +564,14 @@ def train_pipeline():
     ).to(device)
 
     # Optimizer and scheduler with weight decay.
-    optimizer = AdamW(multimodal_model.parameters(), lr=2e-5, weight_decay=1e-2)
-    scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=2, verbose=True)
+    optimizer = torch.optim.Adam(multimodal_model.parameters(), lr=1e-5)
+    scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=2, verbose=True)
+    mortality_pos_weight = get_pos_weight(df_filtered["short_term_mortality"], device)
+    los_pos_weight = get_pos_weight(df_filtered["los_binary"], device)
+    mech_pos_weight = get_pos_weight(df_filtered["mechanical_ventilation"], device)
+    criterion_mortality = FocalLoss(gamma=1, pos_weight=mortality_pos_weight, reduction='mean')
+    criterion_los = FocalLoss(gamma=1, pos_weight=los_pos_weight, reduction='mean')
+    criterion_mech = FocalLoss(gamma=1, pos_weight=mech_pos_weight, reduction='mean')
 
     # Training with Early Stopping (patience = 5 epochs)
     num_epochs = 50
