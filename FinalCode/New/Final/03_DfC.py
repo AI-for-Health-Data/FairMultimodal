@@ -10,14 +10,37 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import ReduceLROnPlateau
-from torch.utils.data import Dataset, DataLoader, Subset
+from torch.utils.data import Dataset, DataLoader
+
 from transformers import BertModel, BertConfig, AutoTokenizer
 from sklearn.metrics import roc_auc_score, average_precision_score, f1_score, recall_score, precision_score
-from sklearn.model_selection import train_test_split
 
 DEBUG = True
 
 # Loss Function and Utility Functions
+class FocalLoss(nn.Module):
+    def __init__(self, gamma=2, alpha=None, reduction='mean', pos_weight=None):
+        super(FocalLoss, self).__init__()
+        self.gamma = gamma
+        self.alpha = alpha
+        self.reduction = reduction
+        self.pos_weight = pos_weight
+
+    def forward(self, logits, targets):
+        bce_loss = F.binary_cross_entropy_with_logits(
+            logits, targets, reduction='none', pos_weight=self.pos_weight
+        )
+        pt = torch.exp(-bce_loss)
+        focal_loss = ((1 - pt) ** self.gamma) * bce_loss
+        if self.alpha is not None:
+            focal_loss = self.alpha * focal_loss
+        if self.reduction == 'mean':
+            return focal_loss.mean()
+        elif self.reduction == 'sum':
+            return focal_loss.sum()
+        else:
+            return focal_loss
+
 def compute_class_weights(df, label_column):
     class_counts = df[label_column].value_counts().sort_index()
     total_samples = len(df)
@@ -67,22 +90,25 @@ def map_insurance(val):
     return mapping.get(val, "other")
 
 # EDDI Calculation Function
-def compute_eddi(true_labels, predicted_labels, sensitive_labels, threshold=0.5):
-    preds = (predicted_labels > threshold).astype(int)
-    overall_error = np.mean(preds != true_labels)
-    norm_factor = max(overall_error, 1 - overall_error)
+def compute_eddi(y_true, y_pred, sensitive_labels, threshold=0.5):
+    # Convert probabilities to binary predictions using the given threshold.
+    y_pred_binary = (np.array(y_pred) > threshold).astype(int)
     unique_groups = np.unique(sensitive_labels)
     subgroup_eddi = {}
+    overall_error = np.mean(y_pred_binary != y_true)
+    denom = max(overall_error, 1 - overall_error) if overall_error not in [0, 1] else 1.0
+    
     for group in unique_groups:
         mask = (sensitive_labels == group)
         if np.sum(mask) == 0:
             subgroup_eddi[group] = np.nan
         else:
-            group_error = np.mean(preds[mask] != true_labels[mask])
-            d_s = (group_error - overall_error) / norm_factor
-            subgroup_eddi[group] = d_s
-    eddi_attr = np.sqrt(np.sum(np.array(list(subgroup_eddi.values()))**2)) / len(unique_groups)
+            er_group = np.mean(y_pred_binary[mask] != y_true[mask])
+            subgroup_eddi[group] = (er_group - overall_error) / denom
+
+    eddi_attr = np.sqrt(np.sum(np.array(list(subgroup_eddi.values())) ** 2)) / len(unique_groups)
     return eddi_attr, subgroup_eddi
+
 
 # BioClinicalBERT Fine-Tuning and Note Aggregation
 class BioClinicalBERT_FT(nn.Module):
@@ -212,16 +238,14 @@ class CustomDataset(Dataset):
         self.labels_los = labels_los
         self.labels_vent = labels_vent
         self.age_ids = age_ids
-        # Preserve sensitive attributes as strings for fairness analysis.
-        self.ethnicity_list = ethnicity_list  
-        self.insurance_list = insurance_list    
+        self.ethnicity_list = ethnicity_list  # list of strings
+        self.insurance_list = insurance_list    # list of strings
         self.length = dummy_input_ids.shape[0]
 
     def __len__(self):
         return self.length
 
     def __getitem__(self, idx):
-        # Sensitive attributes are not used for prediction.
         return (self.dummy_input_ids[idx],
                 self.dummy_attn_mask[idx],
                 self.segment_ids[idx],
@@ -235,7 +259,7 @@ class CustomDataset(Dataset):
                 self.ethnicity_list[idx],
                 self.insurance_list[idx])
 
-# Training and Evaluation Functions
+# Training, Validation, and Evaluation Functions
 def train_step(model, dataloader, optimizer, device, crit_mort, crit_los, crit_vent):
     model.train()
     running_loss = 0.0
@@ -260,6 +284,29 @@ def train_step(model, dataloader, optimizer, device, crit_mort, crit_los, crit_v
         loss.backward()
         optimizer.step()
         running_loss += loss.item()
+    return running_loss
+
+def validation_step(model, dataloader, device, crit_mort, crit_los, crit_vent):
+    model.eval()
+    running_loss = 0.0
+    with torch.no_grad():
+        for batch in dataloader:
+            batch_moved = [x.to(device) if isinstance(x, torch.Tensor) else x for x in batch]
+            (dummy_input_ids, dummy_attn_mask,
+             segment_ids, adm_loc_ids, disch_loc_ids,
+             aggregated_text_embedding,
+             labels_mortality, labels_los, labels_vent,
+             _, _, _) = batch_moved
+            mortality_logits, los_logits, vent_logits = model(
+                dummy_input_ids, dummy_attn_mask,
+                segment_ids, adm_loc_ids, disch_loc_ids,
+                aggregated_text_embedding
+            )
+            loss_mort = crit_mort(mortality_logits, labels_mortality.unsqueeze(1))
+            loss_los = crit_los(los_logits, labels_los.unsqueeze(1))
+            loss_vent = crit_vent(vent_logits, labels_vent.unsqueeze(1))
+            loss = loss_mort + loss_los + loss_vent
+            running_loss += loss.item()
     return running_loss / len(dataloader)
 
 def evaluate_model(model, dataloader, device, threshold=0.5, print_eddi=False):
@@ -425,6 +472,7 @@ def train_pipeline():
         raise ValueError("Merged DataFrame is empty. Check your data and merge keys.")
 
     merged_df.columns = [col.lower().strip() for col in merged_df.columns]
+    # Rename 'age_struct' to 'age' if needed.
     if "age_struct" in merged_df.columns:
         merged_df.rename(columns={"age_struct": "age"}, inplace=True)
     # Check for ethnicity.
@@ -470,7 +518,9 @@ def train_pipeline():
     # Use one row per patient.
     df_unique = df_filtered.groupby("subject_id", as_index=False).first()
     print("Number of unique patients before sampling:", len(df_unique))
-    
+    # For testing purposes, you can sample a subset (e.g., uncomment the next line to use only 1000 patients).
+    # df_unique = df_unique.head(1000)
+    print("Number of unique patients after sampling:", len(df_unique))
     if "segment" not in df_unique.columns:
         df_unique["segment"] = 0
 
@@ -494,18 +544,16 @@ def train_pipeline():
     labels_los = torch.tensor(df_unique["los_binary"].values, dtype=torch.float32)
     labels_vent = torch.tensor(df_unique["mechanical_ventilation"].values, dtype=torch.float32)
     age_ids = torch.tensor(df_unique["age"].values, dtype=torch.long)
-    # Preserve ethnicity and insurance as strings for fairness analysis.
+    # Preserve ethnicity and insurance as strings.
     ethnicity_list = df_unique["ethnicity"].astype(str).tolist()
     insurance_list = df_unique["insurance"].astype(str).tolist()
 
-    # Compute positive weights for each outcome using the INS method.
     mortality_pos_weight = get_pos_weight(df_filtered["short_term_mortality"], device)
     los_pos_weight = get_pos_weight(df_filtered["los_binary"], device)
     mech_pos_weight = get_pos_weight(df_filtered["mechanical_ventilation"], device)
-    # Use weighted BCEWithLogitsLoss for each task.
-    criterion_mortality = nn.BCEWithLogitsLoss(pos_weight=mortality_pos_weight)
-    criterion_los = nn.BCEWithLogitsLoss(pos_weight=los_pos_weight)
-    criterion_mech = nn.BCEWithLogitsLoss(pos_weight=mech_pos_weight)
+    criterion_mortality = FocalLoss(gamma=1, pos_weight=mortality_pos_weight, reduction='mean')
+    criterion_los = FocalLoss(gamma=1, pos_weight=los_pos_weight, reduction='mean')
+    criterion_mech = FocalLoss(gamma=1, pos_weight=mech_pos_weight, reduction='mean')
     
     # Build custom dataset.
     dataset = CustomDataset(
@@ -516,24 +564,19 @@ def train_pipeline():
         age_ids, ethnicity_list, insurance_list
     )
     
-    # Data Splitting: Stratified 80% Train / 20% Test, with 5% of Train for Validation.
-    indices = list(range(len(dataset)))
-    composite_labels = (
-        df_unique["short_term_mortality"].astype(str) + "_" +
-        df_unique["los_binary"].astype(str) + "_" +
-        df_unique["mechanical_ventilation"].astype(str)
-    ).values
-    train_val_indices, test_indices = train_test_split(
-        indices, test_size=0.2, random_state=42, shuffle=True, stratify=composite_labels
-    )
-    composite_train_val = composite_labels[train_val_indices]
-    train_indices, val_indices = train_test_split(
-        train_val_indices, test_size=0.05, random_state=42, shuffle=True, stratify=composite_train_val
-    )
+    # Data Splitting:
+    total_samples = len(dataset)
+    test_size = int(0.2 * total_samples)
+    train_val_size = total_samples - test_size
+    train_val_dataset, test_dataset = torch.utils.data.random_split(dataset, [train_val_size, test_size])
     
-    train_loader = DataLoader(Subset(dataset, train_indices), batch_size=16, shuffle=True)
-    val_loader = DataLoader(Subset(dataset, val_indices), batch_size=16, shuffle=False)
-    test_loader = DataLoader(Subset(dataset, test_indices), batch_size=16, shuffle=False)
+    val_size = int(0.05 * train_val_size)
+    train_size = train_val_size - val_size
+    train_dataset, val_dataset = torch.utils.data.random_split(train_val_dataset, [train_size, val_size])
+    
+    train_loader = DataLoader(train_dataset, batch_size=16, shuffle=True)
+    val_loader = DataLoader(val_dataset, batch_size=16, shuffle=False)
+    test_loader = DataLoader(test_dataset, batch_size=16, shuffle=False)
     
     # Set hyperparameters for the DfC structured branch.
     disease_mapping = {d: i for i, d in enumerate(df_unique["hadm_id"].unique())}
@@ -563,69 +606,41 @@ def train_pipeline():
         hidden_size=512
     ).to(device)
 
-    # Optimizer and scheduler with weight decay.
-    optimizer = torch.optim.Adam(multimodal_model.parameters(), lr=1e-5)
+   
+    optimizer = AdamW(multimodal_model.parameters(), lr=1e-4, weight_decay=1e-2)
     scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=2, verbose=True)
-    mortality_pos_weight = get_pos_weight(df_filtered["short_term_mortality"], device)
-    los_pos_weight = get_pos_weight(df_filtered["los_binary"], device)
-    mech_pos_weight = get_pos_weight(df_filtered["mechanical_ventilation"], device)
-    criterion_mortality = FocalLoss(gamma=1, pos_weight=mortality_pos_weight, reduction='mean')
-    criterion_los = FocalLoss(gamma=1, pos_weight=los_pos_weight, reduction='mean')
-    criterion_mech = FocalLoss(gamma=1, pos_weight=mech_pos_weight, reduction='mean')
-
-    # Training with Early Stopping (patience = 5 epochs)
-    num_epochs = 50
+    
     best_val_loss = float('inf')
-    patience = 5
     patience_counter = 0
-
+    num_epochs = 20
     for epoch in range(num_epochs):
-        train_loss = train_step(multimodal_model, train_loader, optimizer, device,
-                                criterion_mortality, criterion_los, criterion_mech)
-        # Compute validation loss
-        multimodal_model.eval()
-        total_val_loss = 0.0
-        with torch.no_grad():
-            for batch in val_loader:
-                batch_moved = [x.to(device) if isinstance(x, torch.Tensor) else x for x in batch]
-                (dummy_input_ids, dummy_attn_mask,
-                 segment_ids, adm_loc_ids, disch_loc_ids,
-                 aggregated_text_embedding,
-                 labels_mortality, labels_los, labels_vent,
-                 _, _, _) = batch_moved
-                mort_logits, los_logits, vent_logits = multimodal_model(
-                    dummy_input_ids, dummy_attn_mask,
-                    segment_ids, adm_loc_ids, disch_loc_ids,
-                    aggregated_text_embedding
-                )
-                loss_mort = criterion_mortality(mort_logits, labels_mortality.unsqueeze(1))
-                loss_los = criterion_los(los_logits, labels_los.unsqueeze(1))
-                loss_vent = criterion_mech(vent_logits, labels_vent.unsqueeze(1))
-                total_val_loss += (loss_mort + loss_los + loss_vent).item()
-        avg_val_loss = total_val_loss / len(val_loader)
-        scheduler.step(avg_val_loss)
-        print(f"[Epoch {epoch+1}] Train Loss: {train_loss:.4f} | Val Loss: {avg_val_loss:.4f}")
+        multimodal_model.train()
+        running_loss = train_step(multimodal_model, train_loader, optimizer, device,
+                                  criterion_mortality, criterion_los, criterion_mech)
+        train_loss = running_loss / len(train_loader)
         
-        if avg_val_loss < best_val_loss:
-            best_val_loss = avg_val_loss
+        val_loss = validation_step(multimodal_model, val_loader, device, criterion_mortality, criterion_los, criterion_mech)
+        
+        print(f"[Epoch {epoch+1}] Train Loss: {train_loss:.4f} | Validation Loss: {val_loss:.4f}")
+        scheduler.step(val_loss)
+        
+        # Early stopping check.
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
             patience_counter = 0
-            torch.save(multimodal_model.state_dict(), "best_dfc_model.pt")
-            print("Best model saved.")
+            torch.save(multimodal_model.state_dict(), "best_model.pt")
         else:
             patience_counter += 1
-            print(f"No improvement in validation loss for {patience_counter} epoch(s).")
-            if patience_counter >= patience:
-                print("Early stopping triggered.")
+            if patience_counter >= 5:
+                print("Early stopping triggered. No improvement in validation loss for 5 consecutive epochs.")
                 break
 
-    print("Training complete.")
-
-    # Load best model for final evaluation.
-    multimodal_model.load_state_dict(torch.load("best_dfc_model.pt"))
-
+    # Load the best model before evaluation.
+    multimodal_model.load_state_dict(torch.load("best_model.pt"))
+    
     # Evaluate on the test set.
     metrics = evaluate_model(multimodal_model, test_loader, device, threshold=0.5, print_eddi=True)
-    print("\nFinal Evaluation Metrics (DfC):")
+    print("\nFinal Evaluation Metrics on Test Set (DfC):")
     for outcome in ["mortality", "los", "mechanical_ventilation"]:
         m = metrics[outcome]
         print(f"{outcome.capitalize()} - AUC-ROC: {m['aucroc']:.4f}, AUPRC: {m['auprc']:.4f}, "
