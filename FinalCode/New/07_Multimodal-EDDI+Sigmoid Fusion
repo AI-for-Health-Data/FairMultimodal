@@ -1,4 +1,10 @@
 import os
+import sys
+# Remove current directory from sys.path to avoid conflicts with local modules named like standard ones.
+current_dir = os.getcwd()
+if current_dir in sys.path:
+    sys.path.remove(current_dir)
+
 import time
 import random
 import argparse
@@ -14,9 +20,13 @@ from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.utils.data import TensorDataset, DataLoader
 
 from transformers import BertModel, BertConfig, AutoTokenizer
-from sklearn.metrics import roc_auc_score, average_precision_score, f1_score, recall_score, precision_score
+from sklearn.metrics import roc_auc_score, average_precision_score, f1_score, recall_score, precision_score, confusion_matrix
 
 DEBUG = True
+
+# --------------------------
+# Losses and Utility Functions
+# --------------------------
 
 class FocalLoss(nn.Module):
     def __init__(self, gamma=2, alpha=None, reduction='mean', pos_weight=None):
@@ -40,6 +50,12 @@ class FocalLoss(nn.Module):
             return focal_loss.sum()
         else:
             return focal_loss
+
+def compute_class_weights(df, label_column):
+    class_counts = df[label_column].value_counts().sort_index()
+    total_samples = len(df)
+    class_weights = total_samples / (class_counts * len(class_counts))
+    return class_weights
 
 def get_pos_weight(labels_series, device, clip_max=10.0):
     positive = labels_series.sum()
@@ -92,6 +108,9 @@ def compute_eddi(y_true, y_pred, sensitive_labels):
     eddi_attr = np.sqrt(np.sum(np.array(list(subgroup_eddi.values()))**2)) / len(unique_groups)
     return eddi_attr, subgroup_eddi
 
+# --------------------------
+# Model Components
+# --------------------------
 
 # BioClinicalBERT Fine-Tuning for Clinical Notes
 class BioClinicalBERT_FT(nn.Module):
@@ -122,7 +141,7 @@ def apply_bioclinicalbert_on_patient_notes(df, note_columns, tokenizer, model, d
                 encoded = tokenizer.encode_plus(
                     text=note,
                     add_special_tokens=True,
-                    max_length=128,
+                    max_length=512,
                     padding='max_length',
                     truncation=True,
                     return_attention_mask=True,
@@ -134,7 +153,7 @@ def apply_bioclinicalbert_on_patient_notes(df, note_columns, tokenizer, model, d
                     emb = model(input_ids, attn_mask)
                 embeddings.append(emb.cpu().numpy())
             embeddings = np.vstack(embeddings)
-            agg_emb = np.mean(embeddings, axis=0) if aggregation=="mean" else np.max(embeddings, axis=0)
+            agg_emb = np.mean(embeddings, axis=0) if aggregation == "mean" else np.max(embeddings, axis=0)
             aggregated_embeddings.append(agg_emb)
     aggregated_embeddings = np.vstack(aggregated_embeddings)
     return aggregated_embeddings
@@ -147,10 +166,10 @@ class BEHRTModel_Demo(nn.Module):
         config = BertConfig(
             vocab_size=vocab_size,
             hidden_size=hidden_size,
-            num_hidden_layers=6,
-            num_attention_heads=6,
+            num_hidden_layers=12,
+            num_attention_heads=12,
             intermediate_size=3072,
-            max_position_embeddings=128,
+            max_position_embeddings=512,
             type_vocab_size=2,
             hidden_dropout_prob=0.1,
             attention_probs_dropout_prob=0.1
@@ -187,28 +206,30 @@ class BEHRTModel_Lab(nn.Module):
         self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
 
     def forward(self, lab_features):
-        x = lab_features.unsqueeze(-1)  # (B, num_lab_features, 1)
-        x = self.token_embedding(x)     # (B, num_lab_features, hidden_size)
+        x = lab_features.unsqueeze(-1)
+        x = self.token_embedding(x)
         x = x + self.pos_embedding.unsqueeze(0)
-        x = x.permute(1, 0, 2)  # (num_lab_features, B, hidden_size)
+        x = x.permute(1, 0, 2)
         x = self.transformer_encoder(x)
-        x = x.permute(1, 0, 2)  # (B, num_lab_features, hidden_size)
+        x = x.permute(1, 0, 2)
         lab_embedding = x.mean(dim=1)
         return lab_embedding
 
+# --------------------------
 # Multimodal Fusion Model with Dynamic EDDI+Sigmoid Fusion
+# --------------------------
 
 class MultimodalTransformer_EDDI_Sigmoid(nn.Module):
     def __init__(self, text_embed_size, behrt_demo, behrt_lab, device, fusion_hidden=512):
         """
         Fusion process:
-          1. Project each modality into 256-D.
-          2. Compute a scalar for each modality (sum of projection dimensions).
+          1. Project each modality (demo, lab, text) into 256-D.
+          2. Compute a scalar (sum) for each modality.
           3. Compute dynamic weights: weight = 0.33 + beta * (max_scalar - modality_scalar).
           4. Multiply each unimodal projection by its dynamic weight.
-          5. Concatenate the weighted vectors to form a 768-D vector.
-          6. Modulate the concatenated vector elementwise via a single sigmoid layer (L1-regularized).
-          7. Map the result to three logits using a fusion MLP.
+          5. Concatenate all three weighted 256-D vectors to form a 768-D vector.
+          6. Modulate the concatenated vector elementwise using a single sigmoid layer whose weights are L1-regularized.
+          7. Pass the result through a fusion MLP to output three logits.
         """
         super(MultimodalTransformer_EDDI_Sigmoid, self).__init__()
         self.behrt_demo = behrt_demo
@@ -263,15 +284,14 @@ class MultimodalTransformer_EDDI_Sigmoid(nn.Module):
         lab_proj = self.lab_projector(lab_embedding)       # (B, 256)
         text_proj = self.text_projector(text_embedding)    # (B, 256)
 
-        # Compute scalar value (sum) for each modality.
+        # Compute scalar (sum) for each modality.
         demo_scalar = torch.sum(demo_proj, dim=1, keepdim=True)  # (B, 1)
         lab_scalar = torch.sum(lab_proj, dim=1, keepdim=True)    # (B, 1)
         text_scalar = torch.sum(text_proj, dim=1, keepdim=True)  # (B, 1)
-
         modality_scalars = torch.cat([demo_scalar, lab_scalar, text_scalar], dim=1)  # (B, 3)
         max_scalar, _ = torch.max(modality_scalars, dim=1, keepdim=True)  # (B, 1)
 
-        # Compute dynamic weights.
+        # Compute dynamic weights based on the scalar values.
         weight_demo = 0.33 + beta * (max_scalar - demo_scalar)
         weight_lab  = 0.33 + beta * (max_scalar - lab_scalar)
         weight_text = 0.33 + beta * (max_scalar - text_scalar)
@@ -281,7 +301,7 @@ class MultimodalTransformer_EDDI_Sigmoid(nn.Module):
         weighted_lab = weight_lab * lab_proj      # (B, 256)
         weighted_text = weight_text * text_proj   # (B, 256)
 
-        # For dynamic weight update (training), compute modality-specific predictions.
+        # For dynamic weight update, compute modality-specific predictions.
         modality_logits = {
             'demo': self.classifier_demo(demo_proj),
             'lab': self.classifier_lab(lab_proj),
@@ -291,7 +311,7 @@ class MultimodalTransformer_EDDI_Sigmoid(nn.Module):
         # Concatenate weighted vectors → 768-D vector.
         concat_vec = torch.cat([weighted_demo, weighted_lab, weighted_text], dim=1)  # (B, 768)
 
-        # Apply single sigmoid layer (elementwise modulation).
+        # Apply a single sigmoid layer elementwise (modulation with L1 reg on weights).
         adjusted = concat_vec * torch.sigmoid(self.sig_weights)  # (B, 768)
 
         # Fusion MLP to obtain final 3 logits.
@@ -302,9 +322,11 @@ class MultimodalTransformer_EDDI_Sigmoid(nn.Module):
         else:
             return fused_logits, adjusted
 
-def train_step(model, dataloader, optimizer, device,
-               criterion, lambda_edd=1.0, lambda_l1=0.01, target=1.0,
-               lr_weight=0.01, threshold=0.5):
+# --------------------------
+# Training and Evaluation Functions
+# --------------------------
+
+def train_step(model, dataloader, optimizer, device, criterion, beta=1.0, lambda_edd=1.0, lambda_l1=0.01, target=1.0, lr_weight=0.01, threshold=0.5):
     model.train()
     running_loss = 0.0
     for batch in dataloader:
@@ -321,36 +343,66 @@ def train_step(model, dataloader, optimizer, device,
             lab_features, aggregated_text_embedding,
             beta=1.0, return_modality_logits=True
         )
-        # Primary BCE loss.
+        # Calculate BCE loss per label (criterion handles the multi-label setting)
         bce_loss = criterion(fused_logits, labels)
-        # Dummy EDDI loss (MSE loss against constant target).
-        eddi_loss = ((fused_logits - target) ** 2).mean()
+        
+        # ---- Compute EDDI loss per label ----
+        # Instead of a single average over all labels, compute per-label loss.
+        eddi_losses = []
+        num_labels = fused_logits.shape[1]
+        for i in range(num_labels):
+            eddi_loss_i = ((fused_logits[:, i] - target) ** 2).mean()
+            eddi_losses.append(eddi_loss_i)
+        eddi_loss = torch.stack(eddi_losses).mean()
+        
         # L1 regularization on the sigmoid layer's weights.
         l1_reg = lambda_l1 * torch.sum(torch.abs(model.sig_weights))
         loss = bce_loss + lambda_edd * eddi_loss + l1_reg
+        # ----------------------------------
 
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
 
+        # ---- Dynamic Weight Update Using Combined EDDI ----
+        # Compute sensitive groups for all three attributes.
         age_groups = np.array([get_age_bucket(a) for a in age_ids.cpu().numpy()])
-        labels_np = labels[:, 0].cpu().numpy().astype(int)  # Using mortality (index 0) for update.
-        modality_eddi = {}
+        eth_groups = np.array([map_ethnicity(e) for e in ethnicity_ids.cpu().numpy()])
+        ins_groups = np.array([map_insurance(i) for i in insurance_ids.cpu().numpy()])
+        # For update, we use the mortality task (index 0) for each modality.
+        labels_np = labels[:, 0].cpu().numpy().astype(int)
+        modality_combined_eddi = {}
         for key in modality_logits:
+            # Get predictions for current modality.
             probs = torch.sigmoid(modality_logits[key][:, 0]).detach().cpu().numpy()
             preds = (probs > threshold).astype(int)
-            eddi_val, _ = compute_eddi(labels_np, preds, age_groups)
-            modality_eddi[key] = eddi_val
+            # Compute EDDI for each sensitive attribute.
+            eddi_age, _ = compute_eddi(labels_np, preds, age_groups)
+            eddi_eth, _ = compute_eddi(labels_np, preds, eth_groups)
+            eddi_ins, _ = compute_eddi(labels_np, preds, ins_groups)
+            # Aggregate: sqrt(sum of squares) divided by 3.
+            combined = np.sqrt(eddi_age**2 + eddi_eth**2 + eddi_ins**2) / 3.0
+            modality_combined_eddi[key] = combined
 
-        max_eddi = max(modality_eddi.values())
+        # Determine maximum combined EDDI among modalities.
+        max_combined_eddi = max(modality_combined_eddi.values())
+
         with torch.no_grad():
-            new_w_demo = model.dynamic_weight_demo + lr_weight * (max_eddi - modality_eddi['demo'])
-            new_w_lab  = model.dynamic_weight_lab  + lr_weight * (max_eddi - modality_eddi['lab'])
-            new_w_text = model.dynamic_weight_text + lr_weight * (max_eddi - modality_eddi['text'])
+            old_w_demo = model.dynamic_weight_demo.item()
+            old_w_lab  = model.dynamic_weight_lab.item()
+            old_w_text = model.dynamic_weight_text.item()
+
+            new_w_demo = old_w_demo + beta * (max_combined_eddi - modality_combined_eddi['demo'])
+            new_w_lab  = old_w_lab  + beta * (max_combined_eddi - modality_combined_eddi['lab'])
+            new_w_text = old_w_text + beta * (max_combined_eddi - modality_combined_eddi['text'])
             sum_new = new_w_demo + new_w_lab + new_w_text
-            model.dynamic_weight_demo.copy_(new_w_demo / sum_new)
-            model.dynamic_weight_lab.copy_(new_w_lab / sum_new)
-            model.dynamic_weight_text.copy_(new_w_text / sum_new)
+            new_w_demo_norm = new_w_demo / sum_new
+            new_w_lab_norm  = new_w_lab / sum_new
+            new_w_text_norm = new_w_text / sum_new
+            model.dynamic_weight_demo.copy_(torch.tensor(new_w_demo_norm, device=device))
+            model.dynamic_weight_lab.copy_(torch.tensor(new_w_lab_norm, device=device))
+            model.dynamic_weight_text.copy_(torch.tensor(new_w_text_norm, device=device))
+        # ---- End Dynamic Weight Update ----
 
         running_loss += loss.item()
     return running_loss
@@ -381,12 +433,11 @@ def evaluate_model_multi(model, dataloader, device, threshold=0.5, print_eddi=Fa
             all_insurance.append(insurance_ids.cpu())
     all_logits = torch.cat(all_logits, dim=0)
     all_labels = torch.cat(all_labels, dim=0)
-
+    outcome_names = ["mortality", "los", "mechanical_ventilation"]
     metrics = {}
-    outcome_names = ["mortality", "los", "mech_ventilation"]
     for i, outcome in enumerate(outcome_names):
-        probs = torch.sigmoid(all_logits[:, i]).numpy()
-        labels_np = all_labels[:, i].numpy()
+        probs = torch.sigmoid(all_logits[:, i]).numpy().squeeze()
+        labels_np = all_labels[:, i].numpy().squeeze()
         preds = (probs > threshold).astype(int)
         try:
             aucroc = roc_auc_score(labels_np, probs)
@@ -397,11 +448,19 @@ def evaluate_model_multi(model, dataloader, device, threshold=0.5, print_eddi=Fa
         except Exception:
             auprc = float('nan')
         f1 = f1_score(labels_np, preds, zero_division=0)
-        recall = recall_score(labels_np, preds, zero_division=0)
-        precision = precision_score(labels_np, preds, zero_division=0)
+        recall_val = recall_score(labels_np, preds, zero_division=0)
+        cm = confusion_matrix(labels_np, preds)
+        if cm.size == 4:
+            tn, fp, fn, tp = cm.ravel()
+            tpr = tp / (tp + fn) if (tp + fn) > 0 else 0
+            fpr = fp / (fp + tn) if (fp + tn) > 0 else 0
+        else:
+            tpr = 0
+            fpr = 0
+        precision_val = precision_score(labels_np, preds, zero_division=0)
         metrics[outcome] = {"aucroc": aucroc, "auprc": auprc, "f1": f1,
-                            "recall": recall, "precision": precision}
-
+                            "recall (TPR)": recall_val, "TPR": tpr,
+                            "precision": precision_val, "fpr": fpr}
     if print_eddi:
         ages = torch.cat(all_age, dim=0).numpy().squeeze()
         ethnicities = torch.cat(all_ethnicity, dim=0).numpy().squeeze()
@@ -409,7 +468,6 @@ def evaluate_model_multi(model, dataloader, device, threshold=0.5, print_eddi=Fa
         age_groups = np.array([get_age_bucket(a) for a in ages])
         eth_groups = np.array([map_ethnicity(e) for e in ethnicities])
         ins_groups = np.array([map_insurance(i) for i in insurances])
-        
         eddi_stats_all = {}
         for i, outcome in enumerate(outcome_names):
             labels_np = all_labels[:, i].numpy().astype(int)
@@ -430,14 +488,28 @@ def evaluate_model_multi(model, dataloader, device, threshold=0.5, print_eddi=Fa
             print(f"\n--- Fairness (EDDI) Statistics for {outcome} ---")
             print("Final Overall EDDI:", total_eddi)
         metrics["eddi_stats"] = eddi_stats_all
-
     return metrics
 
-def train_pipeline():
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print("Using device:", device)
+# --------------------------
+# Training Pipeline with Hyperparameter Grid
+# --------------------------
 
-    structured_data = pd.read_csv('final_structured_common.csv', low_memory=False)
+def run_experiment(hparams):
+    """
+    Runs the training pipeline with specified hyperparameters.
+    hparams: dict containing keys:
+      - lr: learning rate
+      - num_epochs: number of epochs
+      - lambda_edd: weight for EDDI loss
+      - lambda_l1: weight for L1 regularization
+      - batch_size: batch size for DataLoader
+      - threshold: classification threshold for evaluation and dynamic weight update
+    """
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print("\nUsing device:", device)
+
+    # Data loading and merging
+    structured_data = pd.read_csv("final_structured_common.csv", low_memory=False)
     unstructured_data = pd.read_csv("final_unstructured_common.csv", low_memory=False)
     print("\n--- Debug Info: Before Merge ---")
     print("Structured data shape:", structured_data.shape)
@@ -478,6 +550,7 @@ def train_pipeline():
         else:
             df_filtered["age"] = 0
 
+    # Compute aggregated text embeddings
     print("Computing aggregated text embeddings for each patient...")
     tokenizer = AutoTokenizer.from_pretrained("emilyalsentzer/Bio_ClinicalBERT")
     bioclinical_bert_base = BertModel.from_pretrained("emilyalsentzer/Bio_ClinicalBERT")
@@ -488,6 +561,7 @@ def train_pipeline():
     print("Aggregated text embeddings shape:", aggregated_text_embeddings_np.shape)
     aggregated_text_embeddings_t = torch.tensor(aggregated_text_embeddings_np, dtype=torch.float32)
 
+    # Process demographic columns
     demographics_cols = ["age", "GENDER", "ETHNICITY", "INSURANCE"]
     for col in demographics_cols:
         if col not in df_filtered.columns:
@@ -528,7 +602,7 @@ def train_pipeline():
         aggregated_text_embeddings_t,
         labels
     )
-    dataloader = DataLoader(dataset, batch_size=16, shuffle=True)
+    dataloader = DataLoader(dataset, batch_size=hparams['batch_size'], shuffle=True)
 
     NUM_AGES = df_filtered["age"].nunique()
     NUM_GENDERS = df_filtered["GENDER"].nunique()
@@ -542,6 +616,7 @@ def train_pipeline():
     NUM_LAB_FEATURES = len(lab_feature_columns)
     print("NUM_LAB_FEATURES (tokens):", NUM_LAB_FEATURES)
 
+    # Instantiate models
     behrt_demo = BEHRTModel_Demo(
         num_ages=NUM_AGES,
         num_genders=NUM_GENDERS,
@@ -564,7 +639,7 @@ def train_pipeline():
         fusion_hidden=512
     ).to(device)
 
-    optimizer = torch.optim.Adam(multimodal_model.parameters(), lr=1e-5)
+    optimizer = torch.optim.Adam(multimodal_model.parameters(), lr=hparams['lr'])
     scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=2, verbose=True)
     
     pos_weight_mort = get_pos_weight(df_filtered["short_term_mortality"], device)
@@ -573,33 +648,53 @@ def train_pipeline():
     pos_weight = torch.tensor([pos_weight_mort.item(), pos_weight_los.item(), pos_weight_mech.item()], device=device)
     criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
 
-    num_epochs = 20
-    lambda_edd = 1.0  # Weight for the dummy EDDI loss term.
-    lambda_l1 = 0.01  # L1 regularization weight on the sigmoid layer weights.
-    for epoch in range(num_epochs):
+    # Training loop
+    for epoch in range(hparams['num_epochs']):
         multimodal_model.train()
         running_loss = train_step(multimodal_model, dataloader, optimizer, device,
-                                  criterion, lambda_edd=lambda_edd, lambda_l1=lambda_l1, target=1.0,
-                                  lr_weight=0.01, threshold=0.5)
+                                  criterion, lambda_edd=hparams['lambda_edd'], lambda_l1=hparams['lambda_l1'],
+                                  target=1.0, lr_weight=0.01, threshold=hparams['threshold'])
         epoch_loss = running_loss / len(dataloader)
         print(f"[Epoch {epoch+1}] Train Loss: {epoch_loss:.4f}")
         scheduler.step(epoch_loss)
 
-    metrics = evaluate_model_multi(multimodal_model, dataloader, device, threshold=0.5, print_eddi=True)
+    # Evaluation using the provided threshold
+    metrics = evaluate_model_multi(multimodal_model, dataloader, device, threshold=hparams['threshold'], print_eddi=True)
+    
     print("\n--- Final Evaluation Metrics ---")
     for outcome, metric_vals in metrics.items():
         if outcome == "eddi_stats":
-            print("\nFairness (EDDI) Statistics:")
-            print(metric_vals)
-        else:
+            continue
+        print(f"\nOutcome: {outcome}")
+        print("AUROC           : {:.4f}".format(metric_vals["aucroc"]))
+        print("AUPRC           : {:.4f}".format(metric_vals["auprc"]))
+        print("F1 Score        : {:.4f}".format(metric_vals["f1"]))
+        print("Recall (TPR)    : {:.4f}".format(metric_vals["recall (TPR)"]))
+        print("Calculated TPR  : {:.4f}".format(metric_vals["TPR"]))
+        print("Precision       : {:.4f}".format(metric_vals["precision"]))
+        print("FPR             : {:.4f}".format(metric_vals["fpr"]))
+    
+    if "eddi_stats" in metrics:
+        print("\n--- Detailed Fairness (EDDI) Statistics ---")
+        for outcome, eddi_dict in metrics["eddi_stats"].items():
             print(f"\nOutcome: {outcome}")
-            print("AUROC     : {:.4f}".format(metric_vals["aucroc"]))
-            print("AUPRC     : {:.4f}".format(metric_vals["auprc"]))
-            print("F1 Score  : {:.4f}".format(metric_vals["f1"]))
-            print("Recall    : {:.4f}".format(metric_vals["recall"]))
-            print("Precision : {:.4f}".format(metric_vals["precision"]))
-
-    print("\nTraining complete.")
+            for key, value in eddi_dict.items():
+                print(f"{key}: {value}")
+    
+    return metrics
 
 if __name__ == "__main__":
-    train_pipeline()
+    # Define a grid of hyperparameters.
+    hyperparameter_grid = [
+        {'lr': 1e-5, 'num_epochs': 10, 'lambda_edd': 1.0, 'lambda_l1': 0.01, 'batch_size': 16, 'threshold': 0.50},
+        {'lr': 5e-6, 'num_epochs': 10, 'lambda_edd': 1.0, 'lambda_l1': 0.01, 'batch_size': 16, 'threshold': 0.50}
+    ]
+    
+    results = {}
+    for idx, hparams in enumerate(hyperparameter_grid):
+        print("\n==============================")
+        print(f"Running experiment {idx+1} with hyperparameters: {hparams}")
+        metrics = run_experiment(hparams)
+        results[f"experiment_{idx+1}"] = metrics
+
+    print("\n=== Hyperparameter Search Complete ===")
