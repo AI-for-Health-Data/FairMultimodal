@@ -279,7 +279,7 @@ class MultimodalTransformer(nn.Module):
         return mortality_logit, los_logit, mechvent_logit, (demo_EDDI_mort, lab_EDDI_mort, text_EDDI_mort, EDDI_max_mort)
 
 # Training and Evaluation Functions
-def train_step(model, dataloader, optimizer, device, criterion, beta=1.0, loss_gamma=1.0, target=1.0):
+def train_step(model, dataloader, optimizer, device, beta=1.0, loss_gamma=1.0, target=1.0):
     model.train()
     running_loss = 0.0
     for batch in dataloader:
@@ -295,9 +295,9 @@ def train_step(model, dataloader, optimizer, device, criterion, beta=1.0, loss_g
             age_ids, gender_ids, ethnicity_ids, insurance_ids,
             lab_features, aggregated_text_embedding, beta=beta
         )
-        loss_mort = criterion(mortality_logit, labels_mortality.unsqueeze(1))
-        loss_los = criterion(los_logit, labels_los.unsqueeze(1))
-        loss_mech = criterion(mechvent_logit, labels_mechvent.unsqueeze(1))
+        loss_mort = criterion_mortality(mortality_logit, labels_mortality.unsqueeze(1))
+        loss_los = criterion_los(los_logit, labels_los.unsqueeze(1))
+        loss_mech = criterion_mech(mechvent_logit, labels_mechvent.unsqueeze(1))
         eddi_loss = ((mortality_logit - target) ** 2).mean()
         loss = loss_mort + loss_los + loss_mech + loss_gamma * eddi_loss
 
@@ -305,6 +305,30 @@ def train_step(model, dataloader, optimizer, device, criterion, beta=1.0, loss_g
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
         running_loss += loss.item()
+    return running_loss
+
+def validate_step(model, dataloader, device, beta=1.0, loss_gamma=1.0, target=1.0):
+    model.eval()
+    running_loss = 0.0
+    with torch.no_grad():
+        for batch in dataloader:
+            (demo_dummy_ids, demo_attn_mask,
+             age_ids, gender_ids, ethnicity_ids, insurance_ids,
+             lab_features,
+             aggregated_text_embedding,
+             labels_mortality, labels_los, labels_mechvent) = [x.to(device) for x in batch]
+
+            mortality_logit, los_logit, mechvent_logit, _ = model(
+                demo_dummy_ids, demo_attn_mask,
+                age_ids, gender_ids, ethnicity_ids, insurance_ids,
+                lab_features, aggregated_text_embedding, beta=beta
+            )
+            loss_mort = criterion_mortality(mortality_logit, labels_mortality.unsqueeze(1))
+            loss_los = criterion_los(los_logit, labels_los.unsqueeze(1))
+            loss_mech = criterion_mech(mechvent_logit, labels_mechvent.unsqueeze(1))
+            eddi_loss = ((mortality_logit - target) ** 2).mean()
+            loss = loss_mort + loss_los + loss_mech + loss_gamma * eddi_loss
+            running_loss += loss.item()
     return running_loss
 
 def validate_step(model, dataloader, device, criterion, beta=1.0, loss_gamma=1.0, target=1.0):
@@ -444,7 +468,6 @@ def train_pipeline():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("Using device:", device)
 
-    # Load merged datasets (Structured and Unstructured)
     structured_data = pd.read_csv("final_structured_common.csv")
     unstructured_data = pd.read_csv("final_unstructured_common.csv", low_memory=False)
     print("\n--- Debug Info: Before Merge ---")
@@ -467,12 +490,10 @@ def train_pipeline():
     if merged_df.empty:
         raise ValueError("Merged DataFrame is empty. Check your merge keys.")
 
-    # Ensure outcomes are integers.
     merged_df["short_term_mortality"] = merged_df["short_term_mortality"].astype(int)
     merged_df["los_binary"] = merged_df["los_binary"].astype(int)
     merged_df["mechanical_ventilation"] = merged_df["mechanical_ventilation"].astype(int)
 
-    # Filter rows with at least one valid note.
     note_columns = [col for col in merged_df.columns if col.startswith("note_")]
     def has_valid_note(row):
         for col in note_columns:
@@ -488,6 +509,7 @@ def train_pipeline():
     train_df, val_df = train_test_split(train_val_df, test_size=0.05, random_state=42)
     print(f"Train size: {len(train_df)}, Validation size: {len(val_df)}, Test size: {len(test_df)}")
 
+    # Compute Aggregated Text Embeddings for each split 
     tokenizer = AutoTokenizer.from_pretrained("emilyalsentzer/Bio_ClinicalBERT")
     bioclinical_bert_base = BertModel.from_pretrained("emilyalsentzer/Bio_ClinicalBERT")
     bioclinical_bert_ft = BioClinicalBERT_FT(bioclinical_bert_base, bioclinical_bert_base.config, device).to(device)
@@ -499,6 +521,7 @@ def train_pipeline():
     print("Processing test text embeddings...")
     agg_text_test = apply_bioclinicalbert_on_patient_notes(test_df, note_columns, tokenizer, bioclinical_bert_ft, device, aggregation="mean")
 
+    # Process demographics and lab features for each split 
     demographics_cols = ["age", "GENDER", "ETHNICITY", "INSURANCE"]
     for col in demographics_cols:
         for df in [train_df, val_df, test_df]:
@@ -516,7 +539,6 @@ def train_pipeline():
                            and pd.api.types.is_numeric_dtype(df_filtered[col])]
     print("Number of lab feature columns:", len(lab_feature_columns))
     
-    # Fill missing lab values with 0
     for df in [train_df, val_df, test_df]:
         df[lab_feature_columns] = df[lab_feature_columns].fillna(0)
 
@@ -599,10 +621,18 @@ def train_pipeline():
         device=device
     ).to(device)
 
-    optimizer = AdamW(multimodal_model.parameters(), lr=1e-5, weight_decay=0.01)
+    optimizer = torch.optim.Adam(multimodal_model.parameters(), lr=1e-5)
     scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=2, verbose=True)
-    mortality_pos_weight = get_pos_weight(train_df["short_term_mortality"], device)
-    criterion = FocalLoss(gamma=2, pos_weight=mortality_pos_weight, reduction='mean')
+
+    # Compute positive weights using the entire merged dataset (df_filtered)
+    mortality_pos_weight = get_pos_weight(df_filtered["short_term_mortality"], device)
+    los_pos_weight = get_pos_weight(df_filtered["los_binary"], device)
+    mech_pos_weight = get_pos_weight(df_filtered["mechanical_ventilation"], device)
+
+    # Define separate FocalLoss criteria for each task with gamma set to 1
+    criterion_mortality = FocalLoss(gamma=1, pos_weight=mortality_pos_weight, reduction='mean')
+    criterion_los = FocalLoss(gamma=1, pos_weight=los_pos_weight, reduction='mean')
+    criterion_mech = FocalLoss(gamma=1, pos_weight=mech_pos_weight, reduction='mean')
 
     max_epochs = 20
     patience_limit = 5  
@@ -612,6 +642,7 @@ def train_pipeline():
     best_val_loss = float('inf')
     epochs_no_improve = 0
 
+    # Training Loop with Early Stopping 
     for epoch in range(max_epochs):
         train_loss = train_step(multimodal_model, train_loader, optimizer, device,
                                 criterion, beta=beta_value, loss_gamma=loss_gamma, target=1.0)
@@ -639,6 +670,7 @@ def train_pipeline():
 
     print("Training complete.\n")
     
+    # Load the best model and evaluate on the test set.
     multimodal_model.load_state_dict(torch.load("best_model.pth"))
     final_metrics, mort_logits, unique_subgroups = evaluate_model(multimodal_model, test_loader, device, threshold=0.5, print_eddi=True)
     
