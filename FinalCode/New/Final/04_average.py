@@ -1,5 +1,3 @@
-import os
-import sys
 import time
 import random
 import argparse
@@ -11,24 +9,43 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import ReduceLROnPlateau
-from torch.utils.data import TensorDataset, DataLoader, random_split
+from torch.utils.data import TensorDataset, DataLoader, Subset
 from transformers import BertModel, BertConfig, AutoTokenizer
 from sklearn.metrics import roc_auc_score, average_precision_score, f1_score, recall_score, precision_score
-from sklearn.model_selection import train_test_split
+from iterstrat.ml_stratifiers import MultilabelStratifiedShuffleSplit
 
 DEBUG = True
 
-# Loss Function and Utility Functions
+class FocalLoss(nn.Module):
+    def __init__(self, gamma=2, alpha=None, reduction='mean', pos_weight=None):
+        super(FocalLoss, self).__init__()
+        self.gamma = gamma
+        self.alpha = alpha
+        self.reduction = reduction
+        self.pos_weight = pos_weight
+
+    def forward(self, logits, targets):
+        bce_loss = F.binary_cross_entropy_with_logits(
+            logits, targets, reduction='none', pos_weight=self.pos_weight
+        )
+        pt = torch.exp(-bce_loss)
+        focal_loss = ((1 - pt) ** self.gamma) * bce_loss
+        if self.alpha is not None:
+            focal_loss = self.alpha * focal_loss
+        if self.reduction == 'mean':
+            return focal_loss.mean()
+        elif self.reduction == 'sum':
+            return focal_loss.sum()
+        else:
+            return focal_loss
+
 def compute_class_weights(df, label_column):
-    # INS method: weight = total_samples / (class_count * num_classes)
     class_counts = df[label_column].value_counts().sort_index()
     total_samples = len(df)
-    num_classes = len(class_counts)
-    class_weights = total_samples / (class_counts * num_classes)
+    class_weights = total_samples / (class_counts * len(class_counts))
     return class_weights
 
 def get_pos_weight(labels_series, device, clip_max=10.0):
-    # Compute weight for the positive class: negative_count/positive_count (clipped)
     positive = labels_series.sum()
     negative = len(labels_series) - positive
     if positive == 0:
@@ -62,22 +79,23 @@ def map_insurance(code):
     mapping = {0: "government", 1: "medicare", 2: "medicaid", 3: "private", 4: "self pay"}
     return mapping.get(code, "other")
 
-# EDDI Calculation Function
-def compute_eddi(true_labels, predicted_labels, sensitive_labels, threshold=0.5):
-    preds = (predicted_labels > threshold).astype(int)
-    overall_error = np.mean(preds != true_labels)
-    norm_factor = max(overall_error, 1 - overall_error)
+# Updated EDDI Calculation Function
+def compute_eddi(y_true, y_pred, sensitive_labels, threshold=0.5):
+    y_pred_binary = (np.array(y_pred) > threshold).astype(int)
     unique_groups = np.unique(sensitive_labels)
     subgroup_eddi = {}
+    overall_error = np.mean(y_pred_binary != y_true)
+    denom = max(overall_error, 1 - overall_error) if overall_error not in [0, 1] else 1.0
+
     for group in unique_groups:
         mask = (sensitive_labels == group)
         if np.sum(mask) == 0:
             subgroup_eddi[group] = np.nan
         else:
-            group_error = np.mean(preds[mask] != true_labels[mask])
-            d_s = (group_error - overall_error) / norm_factor
-            subgroup_eddi[group] = d_s
-    eddi_attr = np.sqrt(np.sum(np.array(list(subgroup_eddi.values()))**2)) / len(unique_groups)
+            er_group = np.mean(y_pred_binary[mask] != y_true[mask])
+            subgroup_eddi[group] = (er_group - overall_error) / denom
+
+    eddi_attr = np.sqrt(np.sum(np.array(list(subgroup_eddi.values())) ** 2)) / len(unique_groups)
     return eddi_attr, subgroup_eddi
 
 # BioClinicalBERT Fine-Tuning and Note Aggregation
@@ -109,7 +127,7 @@ def apply_bioclinicalbert_on_patient_notes(df, note_columns, tokenizer, model, d
                 encoded = tokenizer.encode_plus(
                     text=note,
                     add_special_tokens=True,
-                    max_length=512,
+                    max_length=128,
                     padding='max_length',
                     truncation=True,
                     return_attention_mask=True,
@@ -192,7 +210,7 @@ class MultimodalTransformer(nn.Module):
             nn.Linear(text_embed_size, 256),
             nn.ReLU()
         )
-        # Classifier outputs three values: mortality, LOS, and mechanical ventilation
+        # Change output dimension from 2 to 3 (mortality, LOS, mechanical ventilation)
         self.classifier = nn.Sequential(
             nn.Linear(256 + 256, hidden_size),
             nn.ReLU(),
@@ -243,7 +261,31 @@ def train_step(model, dataloader, optimizer, device, crit_mort, crit_los, crit_v
         running_loss += loss.item()
     return running_loss
 
-def evaluate_model(model, dataloader, device, threshold=0.5, print_eddi=False):
+def evaluate_model_loss(model, dataloader, device, crit_mort, crit_los, crit_vent):
+    model.eval()
+    running_loss = 0.0
+    with torch.no_grad():
+        for batch in dataloader:
+            (dummy_input_ids, dummy_attn_mask,
+             age_ids, segment_ids, adm_loc_ids, discharge_loc_ids,
+             gender_ids, ethnicity_ids, insurance_ids,
+             aggregated_text_embedding,
+             labels_mortality, labels_los, labels_vent) = [x.to(device) for x in batch]
+            
+            mort_logits, los_logits, mech_logits = model(
+                dummy_input_ids, dummy_attn_mask,
+                age_ids, segment_ids, adm_loc_ids, discharge_loc_ids,
+                gender_ids, ethnicity_ids, insurance_ids,
+                aggregated_text_embedding
+            )
+            loss_mort = crit_mort(mort_logits, labels_mortality.unsqueeze(1))
+            loss_los = crit_los(los_logits, labels_los.unsqueeze(1))
+            loss_vent = crit_vent(mech_logits, labels_vent.unsqueeze(1))
+            loss = loss_mort + loss_los + loss_vent
+            running_loss += loss.item()
+    return running_loss / len(dataloader)
+
+def evaluate_model_metrics(model, dataloader, device, threshold=0.5, print_eddi=False):
     model.eval()
     all_mort_logits = []
     all_los_logits = []
@@ -254,7 +296,6 @@ def evaluate_model(model, dataloader, device, threshold=0.5, print_eddi=False):
     all_age = []
     all_ethnicity = []
     all_insurance = []
-    
     with torch.no_grad():
         for batch in dataloader:
             (dummy_input_ids, dummy_attn_mask,
@@ -279,6 +320,7 @@ def evaluate_model(model, dataloader, device, threshold=0.5, print_eddi=False):
             all_ethnicity.append(ethnicity_ids.cpu())
             all_insurance.append(insurance_ids.cpu())
     
+    # Concatenate results from all batches.
     all_mort_logits = torch.cat(all_mort_logits, dim=0)
     all_los_logits  = torch.cat(all_los_logits, dim=0)
     all_mech_logits = torch.cat(all_mech_logits, dim=0)
@@ -286,6 +328,7 @@ def evaluate_model(model, dataloader, device, threshold=0.5, print_eddi=False):
     all_labels_los  = torch.cat(all_labels_los, dim=0)
     all_labels_mech = torch.cat(all_labels_mech, dim=0)
     
+    # Convert logits to probabilities.
     mort_probs = torch.sigmoid(all_mort_logits).numpy().squeeze()
     los_probs  = torch.sigmoid(all_los_logits).numpy().squeeze()
     mech_probs = torch.sigmoid(all_mech_logits).numpy().squeeze()
@@ -294,7 +337,6 @@ def evaluate_model(model, dataloader, device, threshold=0.5, print_eddi=False):
     labels_mech_np = all_labels_mech.numpy().squeeze()
     
     metrics = {}
-    # For each outcome, calculate AUC, AUPRC, F1, TPR (recall), Precision, and FPR.
     for task, probs, labels in zip(["mortality", "los", "mechanical_ventilation"],
                                     [mort_probs, los_probs, mech_probs],
                                     [labels_mort_np, labels_los_np, labels_mech_np]):
@@ -306,51 +348,56 @@ def evaluate_model(model, dataloader, device, threshold=0.5, print_eddi=False):
             auprc = average_precision_score(labels, probs)
         except Exception:
             auprc = float('nan')
+        
         preds = (probs > threshold).astype(int)
         f1 = f1_score(labels, preds, zero_division=0)
-        tpr = recall_score(labels, preds, zero_division=0)
+        recall = recall_score(labels, preds, zero_division=0)  # Same as TPR
         precision = precision_score(labels, preds, zero_division=0)
-        fp = np.sum((preds == 1) & (labels == 0))
-        tn = np.sum((preds == 0) & (labels == 0))
-        fpr = fp / (fp + tn) if (fp + tn) > 0 else 0.0
+        
+        # Compute confusion matrix values.
+        TP = ((preds == 1) & (labels == 1)).sum()
+        FP = ((preds == 1) & (labels == 0)).sum()
+        TN = ((preds == 0) & (labels == 0)).sum()
+        FN = ((preds == 0) & (labels == 1)).sum()
+        TPR = TP / (TP + FN) if (TP + FN) > 0 else 0  # True Positive Rate
+        FPR = FP / (FP + TN) if (FP + TN) > 0 else 0  # False Positive Rate
         
         metrics[task] = {"aucroc": aucroc, "auprc": auprc, "f1": f1,
-                         "tpr": tpr, "precision": precision, "fpr": fpr}
+                         "recall": recall, "precision": precision,
+                         "tpr": TPR, "fpr": FPR}
     
-    # Get sensitive attribute groups.
-    ages = torch.cat(all_age, dim=0).numpy().squeeze()
-    ethnicities = torch.cat(all_ethnicity, dim=0).numpy().squeeze()
-    insurances = torch.cat(all_insurance, dim=0).numpy().squeeze()
-    
-    age_groups = np.array([get_age_bucket(a) for a in ages])
-    ethnicity_groups = np.array([map_ethnicity(e) for e in ethnicities])
-    insurance_groups = np.array([map_insurance(i) for i in insurances])
-    
-    age_order = ["15-29", "30-49", "50-69", "70-89", "Other"]
-    ethnicity_order = ["white", "black", "asian", "hispanic", "other"]
-    insurance_order = ["government", "medicare", "medicaid", "private", "self pay", "other"]
-    
-    eddi_stats = {}
-    for task, labels_np, probs in zip(["mortality", "los", "mechanical_ventilation"],
-                                      [labels_mort_np, labels_los_np, labels_mech_np],
-                                      [mort_probs, los_probs, mech_probs]):
-        overall_age, age_eddi_sub = compute_eddi(labels_np.astype(int), probs, age_groups, threshold)
-        overall_eth, eth_eddi_sub = compute_eddi(labels_np.astype(int), probs, ethnicity_groups, threshold)
-        overall_ins, ins_eddi_sub = compute_eddi(labels_np.astype(int), probs, insurance_groups, threshold)
-        total_eddi = np.sqrt((overall_age**2 + overall_eth**2 + overall_ins**2)) / 3
-        eddi_stats[task] = {
-            "age_eddi": overall_age,
-            "age_subgroup_eddi": age_eddi_sub,
-            "ethnicity_eddi": overall_eth,
-            "ethnicity_subgroup_eddi": eth_eddi_sub,
-            "insurance_eddi": overall_ins,
-            "insurance_subgroup_eddi": ins_eddi_sub,
-            "final_EDDI": total_eddi
-        }
-    
-    metrics["eddi_stats"] = eddi_stats
-    
+    # EDDI Calculation if requested.
     if print_eddi:
+        # Fixed subgroup orders.
+        age_order = ["15-29", "30-49", "50-69", "70-89", "Other"]
+        ethnicity_order = ["white", "black", "asian", "hispanic", "other"]
+        insurance_order = ["government", "medicare", "medicaid", "private", "self pay", "other"]
+        
+        eddi_stats = {}
+        for task, labels_np, probs in zip(["mortality", "los", "mechanical_ventilation"],
+                                          [labels_mort_np, labels_los_np, labels_mech_np],
+                                          [mort_probs, los_probs, mech_probs]):
+            overall_age, age_eddi_sub = compute_eddi(labels_np.astype(int), probs, 
+                                                     np.array([get_age_bucket(a) for a in torch.cat(all_age, dim=0).numpy().squeeze()]), 
+                                                     threshold)
+            overall_eth, eth_eddi_sub = compute_eddi(labels_np.astype(int), probs, 
+                                                     np.array([map_ethnicity(e) for e in torch.cat(all_ethnicity, dim=0).numpy().squeeze()]), 
+                                                     threshold)
+            overall_ins, ins_eddi_sub = compute_eddi(labels_np.astype(int), probs, 
+                                                     np.array([map_insurance(i) for i in torch.cat(all_insurance, dim=0).numpy().squeeze()]), 
+                                                     threshold)
+            total_eddi = np.sqrt((overall_age**2 + overall_eth**2 + overall_ins**2)) / 3
+            eddi_stats[task] = {
+                "age_eddi": overall_age,
+                "age_subgroup_eddi": age_eddi_sub,
+                "ethnicity_eddi": overall_eth,
+                "ethnicity_subgroup_eddi": eth_eddi_sub,
+                "insurance_eddi": overall_ins,
+                "insurance_subgroup_eddi": ins_eddi_sub,
+                "final_EDDI": total_eddi
+            }
+        metrics["eddi_stats"] = eddi_stats
+        
         print("\n--- EDDI Calculation for Each Outcome ---")
         for task in ["mortality", "los", "mechanical_ventilation"]:
             print(f"\nTask: {task.capitalize()}")
@@ -374,13 +421,12 @@ def evaluate_model(model, dataloader, device, threshold=0.5, print_eddi=False):
     
     return metrics
 
-# Training Pipeline Function
 def train_pipeline():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("Using device:", device)
 
     keep_cols = {"subject_id", "hadm_id", "short_term_mortality", "los_binary", 
-                 "mechanical_ventilation", "age", "first_wardid", "last_wardid", "ethnicity", "insurance", "gender"}
+                 "mechanical_ventilation", "age", "FIRST_WARDID", "LAST_WARDID", "ETHNICITY", "INSURANCE", "GENDER"}
     
     structured_data = pd.read_csv('final_structured_common.csv')
     new_columns = {col: f"{col}_struct" for col in structured_data.columns if col not in keep_cols}
@@ -408,10 +454,9 @@ def train_pipeline():
     if "age_struct" in merged_df.columns:
         merged_df.rename(columns={"age_struct": "age"}, inplace=True)
     if "age" not in merged_df.columns:
-        print("Column 'age' not found; creating default 'age' column with zeros.")
+        print("Column 'age' not found in merged dataframe; creating default 'age' column with zeros.")
         merged_df["age"] = 0
 
-    # Convert outcome columns to int.
     merged_df["short_term_mortality"] = merged_df["short_term_mortality"].astype(int)
     merged_df["los_binary"] = merged_df["los_binary"].astype(int)
     merged_df["mechanical_ventilation"] = merged_df["mechanical_ventilation"].astype(int)
@@ -428,7 +473,7 @@ def train_pipeline():
     required_cols = ["age", "first_wardid", "last_wardid", "gender", "ethnicity", "insurance"]
     for col in required_cols:
         if col not in df_filtered.columns:
-            print(f"Column {col} not found; creating default values.")
+            print(f"Column {col} not found in filtered dataframe; creating default values.")
             df_filtered[col] = 0
 
     df_unique = df_filtered.groupby("subject_id", as_index=False).first()
@@ -437,23 +482,14 @@ def train_pipeline():
     if "segment" not in df_unique.columns:
         df_unique["segment"] = 0
 
-    # Data Splitting (80% train-test; 5% of train as validation)
-    train_val_df, test_df = train_test_split(df_unique, test_size=0.20, random_state=42)
-    train_df, val_df = train_test_split(train_val_df, test_size=0.05, random_state=42)
-    print(f"Train samples: {len(train_df)}, Validation samples: {len(val_df)}, Test samples: {len(test_df)}")
-    
-    # Initialize tokenizer and BioClinicalBERT.
     tokenizer = AutoTokenizer.from_pretrained("emilyalsentzer/Bio_ClinicalBERT")
     bioclinical_bert_base = BertModel.from_pretrained("emilyalsentzer/Bio_ClinicalBERT")
     bioclinical_bert_ft = BioClinicalBERT_FT(bioclinical_bert_base, bioclinical_bert_base.config, device).to(device)
-    
-    # For text aggregation, we use the train_df (or unique patients) – here we use the full df_unique.
     aggregated_text_embeddings_np = apply_bioclinicalbert_on_patient_notes(
         df_unique, note_columns, tokenizer, bioclinical_bert_ft, device, aggregation="mean"
     )
     aggregated_text_embeddings_t = torch.tensor(aggregated_text_embeddings_np, dtype=torch.float32)
 
-    # Ensure demographic columns exist and convert to numeric codes if necessary.
     demographics_cols = ["age", "gender", "ethnicity", "insurance"]
     for col in demographics_cols:
         if col not in df_unique.columns:
@@ -462,7 +498,6 @@ def train_pipeline():
         elif df_unique[col].dtype == object:
             df_unique[col] = df_unique[col].astype("category").cat.codes
 
-    # Identify lab feature columns and fill missing values.
     exclude_cols = set(["subject_id", "row_id", "hadm_id", "icustay_id",
                         "short_term_mortality", "los_binary", "mechanical_ventilation",
                         "age", "first_wardid", "last_wardid", "ethnicity", "insurance", "gender"])
@@ -472,7 +507,6 @@ def train_pipeline():
     print("Number of lab feature columns:", len(lab_feature_columns))
     df_unique[lab_feature_columns] = df_unique[lab_feature_columns].fillna(0)
 
-    # Create tensors from df_unique (assumed to align with aggregated embeddings order).
     num_samples = len(df_unique)
     dummy_input_ids = torch.zeros((num_samples, 1), dtype=torch.long)
     dummy_attn_mask = torch.ones((num_samples, 1), dtype=torch.long)
@@ -489,17 +523,13 @@ def train_pipeline():
     labels_los = torch.tensor(df_unique["los_binary"].values, dtype=torch.float32)
     labels_vent = torch.tensor(df_unique["mechanical_ventilation"].values, dtype=torch.float32)
 
-    # Compute positive class weights (using training data only ideally)
-    mortality_pos_weight = get_pos_weight(train_df["short_term_mortality"], device)
-    los_pos_weight = get_pos_weight(train_df["los_binary"], device)
-    mech_pos_weight = get_pos_weight(train_df["mechanical_ventilation"], device)
+    mortality_pos_weight = get_pos_weight(df_filtered["short_term_mortality"], device)
+    los_pos_weight = get_pos_weight(df_filtered["los_binary"], device)
+    mech_pos_weight = get_pos_weight(df_filtered["mechanical_ventilation"], device)
+    criterion_mortality = FocalLoss(gamma=1, pos_weight=mortality_pos_weight, reduction='mean')
+    criterion_los = FocalLoss(gamma=1, pos_weight=los_pos_weight, reduction='mean')
+    criterion_mech = FocalLoss(gamma=1, pos_weight=mech_pos_weight, reduction='mean')
     
-    # Use BCEWithLogitsLoss with computed pos_weight.
-    criterion_mortality = nn.BCEWithLogitsLoss(pos_weight=mortality_pos_weight)
-    criterion_los = nn.BCEWithLogitsLoss(pos_weight=los_pos_weight)
-    criterion_mech = nn.BCEWithLogitsLoss(pos_weight=mech_pos_weight)
-    
-    # Build a dataset. (For simplicity, we assume the ordering of df_unique aligns with aggregated_text_embeddings_t.)
     dataset = TensorDataset(
         dummy_input_ids, dummy_attn_mask,
         age_ids, segment_ids, admission_loc_ids, discharge_loc_ids,
@@ -508,21 +538,34 @@ def train_pipeline():
         labels_mortality, labels_los, labels_vent
     )
     
-    # Split dataset into train, val, and test using the indices from our data splits.
-    total_indices = np.arange(num_samples)
-    train_indices = total_indices[df_unique["subject_id"].isin(train_df["subject_id"])]
-    val_indices = total_indices[df_unique["subject_id"].isin(val_df["subject_id"])]
-    test_indices = total_indices[df_unique["subject_id"].isin(test_df["subject_id"])]
-    
-    train_dataset = torch.utils.data.Subset(dataset, train_indices)
-    val_dataset = torch.utils.data.Subset(dataset, val_indices)
-    test_dataset = torch.utils.data.Subset(dataset, test_indices)
+    # Prepare the multilabel array using the three outcomes.
+    labels_array = df_unique[["short_term_mortality", "los_binary", "mechanical_ventilation"]].values
+
+    # 80% train_val, 20% test using iterative stratification.
+    msss = MultilabelStratifiedShuffleSplit(n_splits=1, test_size=0.2, random_state=42)
+    train_val_idx, test_idx = next(msss.split(df_unique, labels_array))
+    print("Train/Val samples:", len(train_val_idx), "Test samples:", len(test_idx))
+
+    # Create the corresponding PyTorch subsets.
+    train_val_dataset = Subset(dataset, train_val_idx)
+    test_dataset = Subset(dataset, test_idx)
+
+    # from the train_val set, allocate 5% for validation.
+    labels_train_val = labels_array[train_val_idx]
+    msss_val = MultilabelStratifiedShuffleSplit(n_splits=1, test_size=0.05, random_state=42)
+    train_idx_rel, val_idx_rel = next(msss_val.split(np.zeros(len(train_val_idx)), labels_train_val))
+    # Convert relative indices to absolute indices.
+    train_idx = [train_val_idx[i] for i in train_idx_rel]
+    val_idx = [train_val_idx[i] for i in val_idx_rel]
+    print(f"Final split -> Train: {len(train_idx)}, Validation: {len(val_idx)}, Test: {len(test_idx)}")
+
+    train_dataset = Subset(dataset, train_idx)
+    val_dataset = Subset(dataset, val_idx)
     
     train_loader = DataLoader(train_dataset, batch_size=16, shuffle=True)
     val_loader = DataLoader(val_dataset, batch_size=16, shuffle=False)
     test_loader = DataLoader(test_dataset, batch_size=16, shuffle=False)
-
-    # Define hyperparameters based on processed data.
+    
     disease_mapping = {d: i for i, d in enumerate(df_unique["hadm_id"].unique())}
     NUM_DISEASES = len(disease_mapping)
     NUM_AGES = df_unique["age"].nunique()
@@ -542,7 +585,7 @@ def train_pipeline():
     print("NUM_GENDERS:", NUM_GENDERS)
     print("NUM_ETHNICITIES:", NUM_ETHNICITIES)
     print("NUM_INSURANCES:", NUM_INSURANCES)
-
+  
     behrt_model = BEHRTModel(
         num_diseases=NUM_DISEASES,
         num_ages=NUM_AGES,
@@ -562,88 +605,73 @@ def train_pipeline():
         hidden_size=512
     ).to(device)
 
-    # Use AdamW with weight decay for regularization.
-    optimizer = AdamW(multimodal_model.parameters(), lr=1e-4, weight_decay=1e-2)
-    scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=2, verbose=True)
+    optimizer = torch.optim.Adam(multimodal_model.parameters(), lr=1e-4)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=2, verbose=True)
 
-    # Training loop with early stopping (patience = 5 epochs).
     num_epochs = 20
     best_val_loss = float('inf')
-    patience = 5
-    epochs_no_improve = 0
-    best_model_state = None
+    patience_counter = 0
+    early_stop_patience = 5
+    best_model_path = "best_multimodal_model.pt"
 
     for epoch in range(num_epochs):
         multimodal_model.train()
         running_loss = train_step(multimodal_model, train_loader, optimizer, device,
                                   criterion_mortality, criterion_los, criterion_mech)
         train_loss = running_loss / len(train_loader)
-        
-        # Evaluate on validation set.
-        multimodal_model.eval()
-        val_loss = 0.0
-        with torch.no_grad():
-            for batch in val_loader:
-                (dummy_input_ids, dummy_attn_mask,
-                 age_ids, segment_ids, adm_loc_ids, discharge_loc_ids,
-                 gender_ids, ethnicity_ids, insurance_ids,
-                 aggregated_text_embedding,
-                 labels_mortality, labels_los, labels_vent) = [x.to(device) for x in batch]
-                
-                mortality_logits, los_logits, vent_logits = multimodal_model(
-                    dummy_input_ids, dummy_attn_mask,
-                    age_ids, segment_ids, adm_loc_ids, discharge_loc_ids,
-                    gender_ids, ethnicity_ids, insurance_ids,
-                    aggregated_text_embedding
-                )
-                loss_mort = criterion_mortality(mortality_logits, labels_mortality.unsqueeze(1))
-                loss_los = criterion_los(los_logits, labels_los.unsqueeze(1))
-                loss_vent = criterion_mech(vent_logits, labels_vent.unsqueeze(1))
-                loss = loss_mort + loss_los + loss_vent
-                val_loss += loss.item()
-        val_loss /= len(val_loader)
-        print(f"[Epoch {epoch+1}] Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}")
+        val_loss = evaluate_model_loss(multimodal_model, val_loader, device,
+                                       criterion_mortality, criterion_los, criterion_mech)
+        print(f"[Epoch {epoch+1}] Train Loss: {train_loss:.4f}, Validation Loss: {val_loss:.4f}")
         scheduler.step(val_loss)
-        
-        # Early stopping check.
+
+        # Evaluate additional metrics on the validation set.
+        val_metrics = evaluate_model_metrics(multimodal_model, val_loader, device, threshold=0.5)
+        print(f"--- Validation Metrics at Epoch {epoch+1} ---")
+        for outcome in ["mortality", "los", "mechanical_ventilation"]:
+            m = val_metrics[outcome]
+            print(f"{outcome.capitalize()} - AUC-ROC: {m['aucroc']:.4f}, AUPRC: {m['auprc']:.4f}, "
+                  f"F1: {m['f1']:.4f}, Recall (TPR): {m['recall']:.4f}, Precision: {m['precision']:.4f}, "
+                  f"TPR: {m['tpr']:.4f}, FPR: {m['fpr']:.4f}")
+    
+        # Early Stopping Check
         if val_loss < best_val_loss:
             best_val_loss = val_loss
-            best_model_state = multimodal_model.state_dict()
-            epochs_no_improve = 0
-            print("Validation loss improved; saving model.")
+            patience_counter = 0
+            torch.save(multimodal_model.state_dict(), best_model_path)
+            print("  Validation loss improved. Saving model.")
         else:
-            epochs_no_improve += 1
-            print(f"No improvement in validation loss for {epochs_no_improve} epoch(s).")
-            if epochs_no_improve >= patience:
+            patience_counter += 1
+            print(f"  No improvement in validation loss. Patience counter: {patience_counter}/{early_stop_patience}")
+            if patience_counter >= early_stop_patience:
                 print("Early stopping triggered.")
                 break
 
-    # Load best model before final evaluation.
-    if best_model_state is not None:
-        multimodal_model.load_state_dict(best_model_state)
-
-    # Evaluate on test set.
-    metrics = evaluate_model(multimodal_model, test_loader, device, threshold=0.5, print_eddi=True)
-    print("\nFinal Evaluation Metrics (Test Set):")
+    # Load the best model for final evaluation
+    multimodal_model.load_state_dict(torch.load(best_model_path))
+    print("\nEvaluating on test set...")
+    metrics = evaluate_model_metrics(multimodal_model, test_loader, device, threshold=0.5, print_eddi=True)
+    print("\nFinal Evaluation Metrics on Test Set:")
     for outcome in ["mortality", "los", "mechanical_ventilation"]:
         m = metrics[outcome]
         print(f"{outcome.capitalize()} - AUC-ROC: {m['aucroc']:.4f}, AUPRC: {m['auprc']:.4f}, "
-              f"F1: {m['f1']:.4f}, TPR: {m['tpr']:.4f}, Precision: {m['precision']:.4f}, FPR: {m['fpr']:.4f}")
+              f"F1: {m['f1']:.4f}, Recall (TPR): {m['recall']:.4f}, Precision: {m['precision']:.4f}, "
+              f"TPR: {m['tpr']:.4f}, FPR: {m['fpr']:.4f}")
     
-    print("\nDetailed EDDI Statistics:")
-    eddi_stats = metrics["eddi_stats"]
-    for outcome in ["mortality", "los", "mechanical_ventilation"]:
-        print(f"\n{outcome.capitalize()} EDDI Stats:")
-        stats = eddi_stats[outcome]
-        print("  Age Subgroup EDDI      :", stats["age_subgroup_eddi"])
-        print("  Aggregated Age EDDI    : {:.4f}".format(stats["age_eddi"]))
-        print("  Ethnicity Subgroup EDDI:", stats["ethnicity_subgroup_eddi"])
-        print("  Aggregated Ethnicity EDDI: {:.4f}".format(stats["ethnicity_eddi"]))
-        print("  Insurance Subgroup EDDI:", stats["insurance_subgroup_eddi"])
-        print("  Aggregated Insurance EDDI: {:.4f}".format(stats["insurance_eddi"]))
-        print("  Final Overall {} EDDI: {:.4f}".format(outcome.capitalize(), stats["final_EDDI"]))
+    if "eddi_stats" in metrics:
+        print("\nDetailed EDDI Statistics on Test Set:")
+        eddi_stats = metrics["eddi_stats"]
+        for outcome in ["mortality", "los", "mechanical_ventilation"]:
+            print(f"\n{outcome.capitalize()} EDDI Stats:")
+            stats = eddi_stats[outcome]
+            print("  Age subgroup EDDI      :", stats["age_subgroup_eddi"])
+            print("  Aggregated Age EDDI    : {:.4f}".format(stats["age_eddi"]))
+            print("  Ethnicity subgroup EDDI:", stats["ethnicity_subgroup_eddi"])
+            print("  Aggregated Ethnicity EDDI: {:.4f}".format(stats["ethnicity_eddi"]))
+            print("  Insurance subgroup EDDI:", stats["insurance_subgroup_eddi"])
+            print("  Aggregated Insurance EDDI: {:.4f}".format(stats["insurance_eddi"]))
+            print("  Final Overall EDDI     : {:.4f}".format(stats["final_EDDI"]))
 
     print("Training complete.")
-
+    
 if __name__ == "__main__":
     train_pipeline()
