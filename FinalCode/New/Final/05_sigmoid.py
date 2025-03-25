@@ -5,7 +5,6 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import roc_auc_score, average_precision_score, f1_score, recall_score, precision_score, confusion_matrix
 
 import torch
 import torch.nn as nn
@@ -15,6 +14,7 @@ from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.utils.data import TensorDataset, DataLoader
 
 from transformers import BertModel, BertConfig, AutoTokenizer
+from sklearn.metrics import roc_auc_score, average_precision_score, f1_score, precision_score, confusion_matrix
 
 DEBUG = True
 
@@ -60,7 +60,6 @@ def get_pos_weight(labels_series, device, clip_max=10.0):
         print("Positive weight:", weight.item())
     return weight
 
-# Demographic Mapping and EDDI Computation
 def get_age_bucket(age):
     if 15 <= age <= 29:
         return "15-29"
@@ -97,7 +96,7 @@ def compute_eddi(y_true, y_pred, sensitive_labels):
     return eddi_attr, subgroup_eddi
 
 
-# BioClinicalBERT for Text Feature Extraction
+# BioClinicalBERT Fine-Tuning Model for text.
 class BioClinicalBERT_FT(nn.Module):
     def __init__(self, base_model, config, device):
         super(BioClinicalBERT_FT, self).__init__()
@@ -143,7 +142,7 @@ def apply_bioclinicalbert_on_patient_notes(df, note_columns, tokenizer, model, d
     aggregated_embeddings = np.vstack(aggregated_embeddings)
     return aggregated_embeddings
 
-# BEHRT Models for Structured Data
+# BEHRT Model for Demographics 
 class BEHRTModel_Demo(nn.Module):
     def __init__(self, num_ages, num_genders, num_ethnicities, num_insurances, hidden_size=768):
         super(BEHRTModel_Demo, self).__init__()
@@ -180,6 +179,7 @@ class BEHRTModel_Demo(nn.Module):
         demo_embedding = cls_token + extra
         return demo_embedding
 
+# BEHRT Model for Lab Features 
 class BEHRTModel_Lab(nn.Module):
     def __init__(self, lab_token_count, hidden_size=768, nhead=8, num_layers=2):
         super(BEHRTModel_Lab, self).__init__()
@@ -199,7 +199,7 @@ class BEHRTModel_Lab(nn.Module):
         lab_embedding = x.mean(dim=1)
         return lab_embedding
 
-# Multimodal Transformer for Outcome Prediction
+# Multimodal Transformer Model 
 class MultimodalTransformer(nn.Module):
     def __init__(self, text_embed_size, behrt_demo, behrt_lab, device, hidden_size=512):
         super(MultimodalTransformer, self).__init__()
@@ -220,12 +220,14 @@ class MultimodalTransformer(nn.Module):
             nn.ReLU()
         )
 
+        # Final classifier outputs three logits.
         self.classifier = nn.Sequential(
             nn.Linear(3, hidden_size),
             nn.ReLU(),
             nn.Dropout(0.1),
             nn.Linear(hidden_size, 3)
         )
+        # Learnable parameters for each branch.
         self.sig_weights_demo = nn.Parameter(torch.randn(256))
         self.sig_weights_lab = nn.Parameter(torch.randn(256))
         self.sig_weights_text = nn.Parameter(torch.randn(256))
@@ -261,14 +263,15 @@ class MultimodalTransformer(nn.Module):
         mech_logits = logits[:, 2].unsqueeze(1)
         return mortality_logits, los_logits, mech_logits, aggregated
 
-# Training and Evaluation Functions
+
 def train_step(model, dataloader, optimizer, device, criterion_mortality, criterion_los, criterion_mech):
     model.train()
     running_loss = 0.0
     for batch in dataloader:
         (demo_dummy_ids, demo_attn_mask,
          age_ids, gender_ids, ethnicity_ids, insurance_ids,
-         lab_features, aggregated_text_embedding,
+         lab_features,
+         aggregated_text_embedding,
          labels_mortality, labels_los, labels_mech) = [x.to(device) for x in batch]
 
         optimizer.zero_grad()
@@ -277,15 +280,37 @@ def train_step(model, dataloader, optimizer, device, criterion_mortality, criter
             age_ids, gender_ids, ethnicity_ids, insurance_ids,
             lab_features, aggregated_text_embedding
         )
-        loss_mort = nn.BCEWithLogitsLoss(pos_weight=criterion_mortality.pos_weight)(mortality_logits, labels_mortality.unsqueeze(1))
-        loss_los = nn.BCEWithLogitsLoss(pos_weight=criterion_los.pos_weight)(los_logits, labels_los.unsqueeze(1))
-        loss_mech = nn.BCEWithLogitsLoss(pos_weight=criterion_mech.pos_weight)(mech_logits, labels_mech.unsqueeze(1))
+        loss_mort = criterion_mortality(mortality_logits, labels_mortality.unsqueeze(1))
+        loss_los = criterion_los(los_logits, labels_los.unsqueeze(1))
+        loss_mech = criterion_mech(mech_logits, labels_mech.unsqueeze(1))
         loss = loss_mort + loss_los + loss_mech
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
         running_loss += loss.item()
-    return running_loss
+    return running_loss / len(dataloader)
+
+def validate_step(model, dataloader, device, criterion_mortality, criterion_los, criterion_mech):
+    model.eval()
+    running_loss = 0.0
+    with torch.no_grad():
+        for batch in dataloader:
+            (demo_dummy_ids, demo_attn_mask,
+             age_ids, gender_ids, ethnicity_ids, insurance_ids,
+             lab_features,
+             aggregated_text_embedding,
+             labels_mortality, labels_los, labels_mech) = [x.to(device) for x in batch]
+            mortality_logits, los_logits, mech_logits, _ = model(
+                demo_dummy_ids, demo_attn_mask,
+                age_ids, gender_ids, ethnicity_ids, insurance_ids,
+                lab_features, aggregated_text_embedding
+            )
+            loss_mort = criterion_mortality(mortality_logits, labels_mortality.unsqueeze(1))
+            loss_los = criterion_los(los_logits, labels_los.unsqueeze(1))
+            loss_mech = criterion_mech(mech_logits, labels_mech.unsqueeze(1))
+            loss = loss_mort + loss_los + loss_mech
+            running_loss += loss.item()
+    return running_loss / len(dataloader)
 
 def evaluate_model(model, dataloader, device, threshold=0.5, print_eddi=False):
     model.eval()
@@ -295,6 +320,7 @@ def evaluate_model(model, dataloader, device, threshold=0.5, print_eddi=False):
     all_labels_mort = []
     all_labels_los = []
     all_labels_mech = []
+    all_final_embeddings = []
     all_age = []
     all_ethnicity = []
     all_insurance = []
@@ -302,9 +328,10 @@ def evaluate_model(model, dataloader, device, threshold=0.5, print_eddi=False):
         for batch in dataloader:
             (demo_dummy_ids, demo_attn_mask,
              age_ids, gender_ids, ethnicity_ids, insurance_ids,
-             lab_features, aggregated_text_embedding,
+             lab_features,
+             aggregated_text_embedding,
              labels_mortality, labels_los, labels_mech) = [x.to(device) for x in batch]
-            mort_logits, los_logits, mech_logits, _ = model(
+            mort_logits, los_logits, mech_logits, final_embedding = model(
                 demo_dummy_ids, demo_attn_mask,
                 age_ids, gender_ids, ethnicity_ids, insurance_ids,
                 lab_features, aggregated_text_embedding
@@ -315,6 +342,7 @@ def evaluate_model(model, dataloader, device, threshold=0.5, print_eddi=False):
             all_labels_mort.append(labels_mortality.cpu())
             all_labels_los.append(labels_los.cpu())
             all_labels_mech.append(labels_mech.cpu())
+            all_final_embeddings.append(final_embedding.cpu())
             all_age.append(age_ids.cpu())
             all_ethnicity.append(ethnicity_ids.cpu())
             all_insurance.append(insurance_ids.cpu())
@@ -357,6 +385,7 @@ def evaluate_model(model, dataloader, device, threshold=0.5, print_eddi=False):
         f1 = f1_score(labels, preds, zero_division=0)
         precision_val = precision_score(labels, preds, zero_division=0)
         
+        # Compute confusion matrix and then TPR and FPR
         cm = confusion_matrix(labels, preds)
         if cm.size == 4:
             tn, fp, fn, tp = cm.ravel()
@@ -375,9 +404,12 @@ def evaluate_model(model, dataloader, device, threshold=0.5, print_eddi=False):
             "fpr": fpr
         }
         
-        eddi_age, age_eddi_sub = compute_eddi(labels, preds, np.array([get_age_bucket(a) for a in torch.cat(all_age, dim=0).numpy().squeeze()]))
-        eddi_eth, eth_eddi_sub = compute_eddi(labels, preds, np.array([map_ethnicity(e) for e in torch.cat(all_ethnicity, dim=0).numpy().squeeze()]))
-        eddi_ins, ins_eddi_sub = compute_eddi(labels, preds, np.array([map_insurance(i) for i in torch.cat(all_insurance, dim=0).numpy().squeeze()]))
+        eddi_age, age_eddi_sub = compute_eddi(labels, preds, 
+                            np.array([get_age_bucket(a) for a in torch.cat(all_age, dim=0).numpy().squeeze()]))
+        eddi_eth, eth_eddi_sub = compute_eddi(labels, preds, 
+                            np.array([map_ethnicity(e) for e in torch.cat(all_ethnicity, dim=0).numpy().squeeze()]))
+        eddi_ins, ins_eddi_sub = compute_eddi(labels, preds, 
+                            np.array([map_insurance(i) for i in torch.cat(all_insurance, dim=0).numpy().squeeze()]))
         age_scores = [age_eddi_sub.get(bucket, 0) for bucket in age_order]
         eth_scores = [eth_eddi_sub.get(group, 0) for group in ethnicity_order]
         ins_scores = [ins_eddi_sub.get(group, 0) for group in insurance_order]
@@ -422,12 +454,11 @@ def evaluate_model(model, dataloader, device, threshold=0.5, print_eddi=False):
     
     return metrics
 
-# Main Training Pipeline
+
 def train_pipeline():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("Using device:", device)
 
-    # Load and merge structured and unstructured data.
     structured_data = pd.read_csv('final_structured_common.csv', low_memory=False)
     unstructured_data = pd.read_csv("final_unstructured_common.csv", low_memory=False)
     print("\n--- Debug Info: Before Merge ---")
@@ -499,48 +530,45 @@ def train_pipeline():
     print("Number of lab feature columns:", len(lab_feature_columns))
     df_filtered[lab_feature_columns] = df_filtered[lab_feature_columns].fillna(0)
 
+    # Normalize Lab Features.
     lab_features_np = df_filtered[lab_feature_columns].values.astype(np.float32)
     lab_mean = np.mean(lab_features_np, axis=0)
     lab_std = np.std(lab_features_np, axis=0)
     lab_features_np = (lab_features_np - lab_mean) / (lab_std + 1e-6)
     
-    num_samples = len(df_filtered)
-    demo_dummy_ids = torch.zeros((num_samples, 1), dtype=torch.long)
-    demo_attn_mask = torch.ones((num_samples, 1), dtype=torch.long)
-
-    age_ids = torch.tensor(df_filtered["age"].values, dtype=torch.long)
-    gender_ids = torch.tensor(df_filtered["GENDER"].values, dtype=torch.long)
-    ethnicity_ids = torch.tensor(df_filtered["ETHNICITY"].values, dtype=torch.long)
-    insurance_ids = torch.tensor(df_filtered["INSURANCE"].values, dtype=torch.long)
-
-    lab_features_t = torch.tensor(lab_features_np, dtype=torch.float32)
-    labels_mortality = torch.tensor(df_filtered["short_term_mortality"].values, dtype=torch.float32)
-    labels_los = torch.tensor(df_filtered["los_binary"].values, dtype=torch.float32)
-    labels_mech = torch.tensor(df_filtered["mechanical_ventilation"].values, dtype=torch.float32)
-
-    full_dataset = TensorDataset(
-        demo_dummy_ids, demo_attn_mask,
-        age_ids, gender_ids, ethnicity_ids, insurance_ids,
-        lab_features_t, aggregated_text_embeddings_t,
-        labels_mortality, labels_los, labels_mech
-    )
+    # Split df_filtered indices into train (80%) and test (20%)
+    train_val_df, test_df = train_test_split(df_filtered, test_size=0.20, random_state=42, stratify=df_filtered["short_term_mortality"])
+    # From train set, split out 5% for validation
+    train_df, val_df = train_test_split(train_val_df, test_size=0.05, random_state=42, stratify=train_val_df["short_term_mortality"])
+    print(f"Train samples: {len(train_df)}, Validation samples: {len(val_df)}, Test samples: {len(test_df)}")
     
-    # Stratified Data Splitting
-    strat_labels = df_filtered[['short_term_mortality', 'los_binary', 'mechanical_ventilation']].astype(str).agg('_'.join, axis=1)
-    total_indices = list(range(len(full_dataset)))
-    train_val_indices, test_indices = train_test_split(
-        total_indices, test_size=0.2, random_state=42, stratify=strat_labels
-    )
-    # For the training and validation split, stratify on the corresponding subset.
-    strat_labels_train_val = strat_labels.iloc[train_val_indices]
-    train_indices, val_indices = train_test_split(
-        train_val_indices, test_size=0.05, random_state=42, stratify=strat_labels_train_val
-    )
-    
-    train_dataset = torch.utils.data.Subset(full_dataset, train_indices)
-    val_dataset = torch.utils.data.Subset(full_dataset, val_indices)
-    test_dataset = torch.utils.data.Subset(full_dataset, test_indices)
-    
+    def build_dataset(df, aggregated_embeddings):
+        num_samples = len(df)
+        demo_dummy_ids = torch.zeros((num_samples, 1), dtype=torch.long)
+        demo_attn_mask = torch.ones((num_samples, 1), dtype=torch.long)
+        age_ids = torch.tensor(df["age"].values, dtype=torch.long)
+        gender_ids = torch.tensor(df["GENDER"].values, dtype=torch.long)
+        ethnicity_ids = torch.tensor(df["ETHNICITY"].values, dtype=torch.long)
+        insurance_ids = torch.tensor(df["INSURANCE"].values, dtype=torch.long)
+        lab_features_t = torch.tensor(lab_features_np[df.index], dtype=torch.float32)
+        aggregated_text_embedding = torch.tensor(aggregated_embeddings[df["subject_id"].unique().argsort()], dtype=torch.float32)
+        labels_mortality = torch.tensor(df["short_term_mortality"].values, dtype=torch.float32)
+        labels_los = torch.tensor(df["los_binary"].values, dtype=torch.float32)
+        labels_mech = torch.tensor(df["mechanical_ventilation"].values, dtype=torch.float32)
+        dataset = TensorDataset(
+            demo_dummy_ids, demo_attn_mask,
+            age_ids, gender_ids, ethnicity_ids, insurance_ids,
+            lab_features_t,
+            aggregated_text_embedding,
+            labels_mortality, labels_los, labels_mech
+        )
+        return dataset
+
+    # Build datasets and dataloaders.
+    train_dataset = build_dataset(train_df, aggregated_text_embeddings_np)
+    val_dataset = build_dataset(val_df, aggregated_text_embeddings_np)
+    test_dataset = build_dataset(test_df, aggregated_text_embeddings_np)
+
     train_loader = DataLoader(train_dataset, batch_size=16, shuffle=True)
     val_loader = DataLoader(val_dataset, batch_size=16, shuffle=False)
     test_loader = DataLoader(test_dataset, batch_size=16, shuffle=False)
@@ -557,92 +585,77 @@ def train_pipeline():
     NUM_LAB_FEATURES = len(lab_feature_columns)
     print("NUM_LAB_FEATURES (tokens):", NUM_LAB_FEATURES)
 
+    # Define the BEHRT branches.
     behrt_demo = BEHRTModel_Demo(
-        num_ages=NUM_AGES, num_genders=NUM_GENDERS,
-        num_ethnicities=NUM_ETHNICITIES, num_insurances=NUM_INSURANCES,
+        num_ages=NUM_AGES,
+        num_genders=NUM_GENDERS,
+        num_ethnicities=NUM_ETHNICITIES,
+        num_insurances=NUM_INSURANCES,
         hidden_size=768
     ).to(device)
     behrt_lab = BEHRTModel_Lab(
-        lab_token_count=NUM_LAB_FEATURES, hidden_size=768, nhead=8, num_layers=2
+        lab_token_count=NUM_LAB_FEATURES,
+        hidden_size=768,
+        nhead=8,
+        num_layers=2
     ).to(device)
-    
+
     multimodal_model = MultimodalTransformer(
-        text_embed_size=768, behrt_demo=behrt_demo,
-        behrt_lab=behrt_lab, device=device, hidden_size=512
+        text_embed_size=768,
+        behrt_demo=behrt_demo,
+        behrt_lab=behrt_lab,
+        device=device,
+        hidden_size=512
     ).to(device)
-    
-    optimizer = AdamW(multimodal_model.parameters(), lr=1e-5, weight_decay=0.01)
+
+    optimizer = torch.optim.Adam(multimodal_model.parameters(), lr=1e-5)
     scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=2, verbose=True)
     
     mortality_pos_weight = get_pos_weight(df_filtered["short_term_mortality"], device)
     los_pos_weight = get_pos_weight(df_filtered["los_binary"], device)
     mech_pos_weight = get_pos_weight(df_filtered["mechanical_ventilation"], device)
     
-    criterion_mortality = nn.BCEWithLogitsLoss(pos_weight=mortality_pos_weight)
-    criterion_los = nn.BCEWithLogitsLoss(pos_weight=los_pos_weight)
-    criterion_mech = nn.BCEWithLogitsLoss(pos_weight=mech_pos_weight)
-    
+    criterion_mortality = FocalLoss(gamma=1, pos_weight=mortality_pos_weight, reduction='mean')
+    criterion_los = FocalLoss(gamma=1, pos_weight=los_pos_weight, reduction='mean')
+    criterion_mech = FocalLoss(gamma=1, pos_weight=mech_pos_weight, reduction='mean')
+
     num_epochs = 20
     best_val_loss = float('inf')
     patience = 5
     epochs_no_improve = 0
-    best_model_state = None
 
     for epoch in range(num_epochs):
-        multimodal_model.train()
-        running_loss = train_step(multimodal_model, train_loader, optimizer, device,
-                                  criterion_mortality, criterion_los, criterion_mech)
-        train_loss = running_loss / len(train_loader)
+        train_loss = train_step(multimodal_model, train_loader, optimizer, device,
+                                criterion_mortality, criterion_los, criterion_mech)
+        val_loss = validate_step(multimodal_model, val_loader, device,
+                                 criterion_mortality, criterion_los, criterion_mech)
+        print(f"[Epoch {epoch+1}] Train Loss: {train_loss:.4f} | Validation Loss: {val_loss:.4f}")
+        scheduler.step(val_loss)
         
-        multimodal_model.eval()
-        val_loss = 0.0
-        with torch.no_grad():
-            for batch in val_loader:
-                (demo_dummy_ids, demo_attn_mask,
-                 age_ids, gender_ids, ethnicity_ids, insurance_ids,
-                 lab_features, aggregated_text_embedding,
-                 labels_mortality, labels_los, labels_mech) = [x.to(device) for x in batch]
-                mort_logits, los_logits, mech_logits, _ = multimodal_model(
-                    demo_dummy_ids, demo_attn_mask,
-                    age_ids, gender_ids, ethnicity_ids, insurance_ids,
-                    lab_features, aggregated_text_embedding
-                )
-                loss_mort = criterion_mortality(mort_logits, labels_mortality.unsqueeze(1))
-                loss_los = criterion_los(los_logits, labels_los.unsqueeze(1))
-                loss_mech = criterion_mech(mech_logits, labels_mech.unsqueeze(1))
-                loss = loss_mort + loss_los + loss_mech
-                val_loss += loss.item()
-        val_loss /= len(val_loader)
-        
-        print(f"[Epoch {epoch+1}] Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f}")
-        scheduler.step(train_loss)
-        
+        # Early stopping check
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             epochs_no_improve = 0
-            best_model_state = multimodal_model.state_dict()
-            print("Validation loss improved; saving best model.")
+            # Save the best model.
+            torch.save(multimodal_model.state_dict(), "best_multimodal_model.pt")
+            print("Best model saved!")
         else:
             epochs_no_improve += 1
-            print(f"No improvement for {epochs_no_improve} epoch(s).")
             if epochs_no_improve >= patience:
-                print("Early stopping triggered.")
+                print("Early stopping triggered. No improvement for 5 consecutive epochs.")
                 break
 
-    if best_model_state is not None:
-        multimodal_model.load_state_dict(best_model_state)
-        print("Best model loaded for final evaluation.")
-    
-    # Evaluate on Test Set Only
-    metrics = evaluate_model(multimodal_model, test_loader, device, threshold=0.5, print_eddi=True)
-    print("\nFinal Evaluation Metrics (Test Set):")
+    # Load best model for testing.
+    multimodal_model.load_state_dict(torch.load("best_multimodal_model.pt"))
+    test_metrics = evaluate_model(multimodal_model, test_loader, device, threshold=0.5, print_eddi=True)
+    print("\nFinal Evaluation on Test Set:")
     for outcome in ["mortality", "los", "mechanical_ventilation"]:
-        m = metrics[outcome]
+        m = test_metrics[outcome]
         print(f"{outcome.capitalize()} - AUC-ROC: {m['aucroc']:.4f}, AUPRC: {m['auprc']:.4f}, "
               f"F1: {m['f1']:.4f}, TPR: {m['tpr']:.4f}, Precision: {m['precision']:.4f}, FPR: {m['fpr']:.4f}")
     
-    print("\nFinal Detailed EDDI Statistics (Test Set):")
-    eddi_stats = metrics["eddi_stats"]
+    print("\nFinal Detailed EDDI Statistics on Test Set:")
+    eddi_stats = test_metrics["eddi_stats"]
     print("\nMortality EDDI Stats:")
     print("  Age subgroup EDDI      :", eddi_stats["mortality"]["age_subgroup_eddi"])
     print("  Aggregated Age EDDI      : {:.4f}".format(eddi_stats["mortality"]["age_eddi"]))
@@ -670,9 +683,9 @@ def train_pipeline():
     print("  Aggregated Insurance EDDI: {:.4f}".format(eddi_stats["mechanical_ventilation"]["insurance_eddi"]))
     print("  Final Overall Mechanical Ventilation EDDI: {:.4f}".format(eddi_stats["mechanical_ventilation"]["final_EDDI"]))
 
-    print("\nOverall EDDI Summary (Test Set):")
-    print(metrics["eddi_stats"]["overall"])
-    print("Training complete.")
+    print("\nOverall EDDI Summary:")
+    print(test_metrics["eddi_stats"]["overall"])
+    print("Training and testing complete.")
 
 if __name__ == "__main__":
     train_pipeline()
