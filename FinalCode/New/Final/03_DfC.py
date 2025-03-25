@@ -4,20 +4,19 @@ import argparse
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import ReduceLROnPlateau
-from torch.utils.data import Dataset, DataLoader
-
+from torch.utils.data import Dataset, DataLoader, Subset
 from transformers import BertModel, BertConfig, AutoTokenizer
 from sklearn.metrics import roc_auc_score, average_precision_score, f1_score, recall_score, precision_score
+from skmultilearn.model_selection import iterative_train_test_split
 
 DEBUG = True
 
-# Loss Function and Utility Functions
+
 class FocalLoss(nn.Module):
     def __init__(self, gamma=2, alpha=None, reduction='mean', pos_weight=None):
         super(FocalLoss, self).__init__()
@@ -60,7 +59,7 @@ def get_pos_weight(labels_series, device, clip_max=10.0):
         print("Positive weight:", weight.item())
     return weight
 
-# Sensitive Attribute (Demographic) Mapping Functions
+
 def get_age_bucket(age):
     if 15 <= age <= 29:
         return "15-29"
@@ -91,7 +90,6 @@ def map_insurance(val):
 
 # EDDI Calculation Function
 def compute_eddi(y_true, y_pred, sensitive_labels, threshold=0.5):
-    # Convert probabilities to binary predictions using the given threshold.
     y_pred_binary = (np.array(y_pred) > threshold).astype(int)
     unique_groups = np.unique(sensitive_labels)
     subgroup_eddi = {}
@@ -108,7 +106,6 @@ def compute_eddi(y_true, y_pred, sensitive_labels, threshold=0.5):
 
     eddi_attr = np.sqrt(np.sum(np.array(list(subgroup_eddi.values())) ** 2)) / len(unique_groups)
     return eddi_attr, subgroup_eddi
-
 
 # BioClinicalBERT Fine-Tuning and Note Aggregation
 class BioClinicalBERT_FT(nn.Module):
@@ -186,6 +183,7 @@ class BEHRTModel_DfC(nn.Module):
         extra = (seg_embeds + adm_embeds + disch_embeds) / 3.0
         cls_embedding = cls_token + extra
         return cls_embedding
+
 
 # Multimodal Transformer (DfC Version - Average Fusion)
 class MultimodalTransformer_DfC(nn.Module):
@@ -450,7 +448,7 @@ def train_pipeline():
                  "ethnicity", "insurance", "gender"}
     
     structured_data = pd.read_csv('final_structured_common.csv')
-    # Rename extra columns to avoid conflicts.
+    # Rename extra columns to avoid conflicts with local modules.
     new_columns = {col: f"{col}_struct" for col in structured_data.columns if col not in keep_cols}
     structured_data.rename(columns=new_columns, inplace=True)
 
@@ -564,19 +562,33 @@ def train_pipeline():
         age_ids, ethnicity_list, insurance_list
     )
     
-    # Data Splitting:
+    
     total_samples = len(dataset)
-    test_size = int(0.2 * total_samples)
-    train_val_size = total_samples - test_size
-    train_val_dataset, test_dataset = torch.utils.data.random_split(dataset, [train_val_size, test_size])
-    
-    val_size = int(0.05 * train_val_size)
-    train_size = train_val_size - val_size
-    train_dataset, val_dataset = torch.utils.data.random_split(train_val_dataset, [train_size, val_size])
-    
+    Y = np.vstack([
+        labels_mortality.numpy(),
+        labels_los.numpy(),
+        labels_vent.numpy()
+    ]).T
+    X = np.arange(total_samples).reshape(-1, 1)
+
+    # First, split off the test set (20%).
+    X_train_val, Y_train_val, X_test, Y_test = iterative_train_test_split(X, Y, test_size=0.2)
+
+    # Next, split the training/validation set: reserve 5% for validation.
+    val_fraction = 0.05
+    X_train, Y_train, X_val, Y_val = iterative_train_test_split(X_train_val, Y_train_val, test_size=val_fraction)
+
+    train_indices = X_train.flatten().tolist()
+    val_indices = X_val.flatten().tolist()
+    test_indices  = X_test.flatten().tolist()
+
+    train_dataset = Subset(dataset, train_indices)
+    val_dataset   = Subset(dataset, val_indices)
+    test_dataset  = Subset(dataset, test_indices)
+
     train_loader = DataLoader(train_dataset, batch_size=16, shuffle=True)
-    val_loader = DataLoader(val_dataset, batch_size=16, shuffle=False)
-    test_loader = DataLoader(test_dataset, batch_size=16, shuffle=False)
+    val_loader   = DataLoader(val_dataset, batch_size=16, shuffle=False)
+    test_loader  = DataLoader(test_dataset, batch_size=16, shuffle=False)
     
     # Set hyperparameters for the DfC structured branch.
     disease_mapping = {d: i for i, d in enumerate(df_unique["hadm_id"].unique())}
@@ -606,7 +618,7 @@ def train_pipeline():
         hidden_size=512
     ).to(device)
 
-   
+    
     optimizer = AdamW(multimodal_model.parameters(), lr=1e-4, weight_decay=1e-2)
     scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=2, verbose=True)
     
@@ -635,8 +647,23 @@ def train_pipeline():
                 print("Early stopping triggered. No improvement in validation loss for 5 consecutive epochs.")
                 break
 
-    # Load the best model before evaluation.
-    multimodal_model.load_state_dict(torch.load("best_model.pt"))
+    
+    state_dict = torch.load("best_model.pt", map_location=device)
+    model_dict = multimodal_model.state_dict()
+    new_state_dict = {}
+    for key, value in state_dict.items():
+        # For keys coming from the underlying BEHRT branch, add the prefix "BEHRT."
+        if key.startswith("bert.") or key.startswith("segment_embedding") or key.startswith("admission_loc_embedding") or key.startswith("discharge_loc_embedding"):
+            new_key = "BEHRT." + key
+        else:
+            new_key = key
+        if new_key in model_dict:
+            new_state_dict[new_key] = value
+        else:
+            print("Skipping key:", key)
+    missing_keys, unexpected_keys = multimodal_model.load_state_dict(new_state_dict, strict=False)
+    print("Missing keys after loading:", missing_keys)
+    print("Unexpected keys after loading:", unexpected_keys)
     
     # Evaluate on the test set.
     metrics = evaluate_model(multimodal_model, test_loader, device, threshold=0.5, print_eddi=True)
