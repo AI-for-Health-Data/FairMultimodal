@@ -13,13 +13,11 @@ from torch.utils.data import TensorDataset, DataLoader, Subset
 from transformers import BertModel, BertConfig, AutoTokenizer
 from sklearn.metrics import accuracy_score, recall_score, precision_score, roc_auc_score, average_precision_score, f1_score, roc_curve
 from iterstrat.ml_stratifiers import MultilabelStratifiedShuffleSplit
-
 import pickle
 import math
 import matplotlib.pyplot as plt
 
 DEBUG = True
-
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 class FocalLoss(nn.Module):
@@ -45,12 +43,6 @@ class FocalLoss(nn.Module):
         else:
             return focal_loss
 
-def compute_class_weights(df, label_column):
-    class_counts = df[label_column].value_counts().sort_index()
-    total_samples = len(df)
-    class_weights = total_samples / (class_counts * len(class_counts))
-    return class_weights
-
 def get_pos_weight(labels_series, device, clip_max=10.0):
     positive = labels_series.sum()
     negative = len(labels_series) - positive
@@ -63,6 +55,7 @@ def get_pos_weight(labels_series, device, clip_max=10.0):
     if DEBUG:
         print("Positive weight:", weight.item())
     return weight
+
 
 def get_age_bucket(age):
     if 15 <= age <= 29:
@@ -89,7 +82,7 @@ def compute_eddi(y_true, y_pred, sensitive_labels, threshold=0.5):
     unique_groups = np.unique(sensitive_labels)
     subgroup_eddi = {}
     overall_error = np.mean(y_pred_binary != y_true)
-    denom = max(overall_error, 1 - overall_error) if overall_error not in [0,1] else 1.0
+    denom = max(overall_error, 1 - overall_error) if overall_error not in [0, 1] else 1.0
 
     for group in unique_groups:
         mask = (sensitive_labels == group)
@@ -99,10 +92,10 @@ def compute_eddi(y_true, y_pred, sensitive_labels, threshold=0.5):
             er_group = np.mean(y_pred_binary[mask] != y_true[mask])
             subgroup_eddi[group] = (er_group - overall_error) / denom
 
-    eddi_attr = np.sqrt(np.sum(np.array(list(subgroup_eddi.values()))**2)) / len(unique_groups)
+    eddi_attr = np.sqrt(np.sum(np.array(list(subgroup_eddi.values())) ** 2)) / len(unique_groups)
     return eddi_attr, subgroup_eddi
 
-# BioClinicalBERT for Unstructured Data
+
 class BioClinicalBERT_FT(nn.Module):
     def __init__(self, base_model, config, device):
         super(BioClinicalBERT_FT, self).__init__()
@@ -148,7 +141,6 @@ def apply_bioclinicalbert_on_patient_notes(df, note_columns, tokenizer, model, d
     aggregated_embeddings = np.vstack(aggregated_embeddings)
     return aggregated_embeddings
 
-# BEHRT Model for Structured Data
 class BEHRTModel(nn.Module):
     def __init__(self, num_diseases, num_ages, num_segments, num_admission_locs, num_discharge_locs,
                  num_genders, num_ethnicities, num_insurances, hidden_size=768):
@@ -176,7 +168,6 @@ class BEHRTModel(nn.Module):
 
     def forward(self, input_ids, attention_mask, age_ids, segment_ids, adm_loc_ids, disch_loc_ids,
                 gender_ids, ethnicity_ids, insurance_ids):
-        # Clamp indices to avoid out-of-bound errors.
         age_ids = torch.clamp(age_ids, 0, self.age_embedding.num_embeddings - 1)
         segment_ids = torch.clamp(segment_ids, 0, self.segment_embedding.num_embeddings - 1)
         adm_loc_ids = torch.clamp(adm_loc_ids, 0, self.admission_loc_embedding.num_embeddings - 1)
@@ -199,7 +190,6 @@ class BEHRTModel(nn.Module):
         cls_embedding = cls_token + extra
         return cls_embedding
 
-# Multimodal Transformer Model 
 class MultimodalTransformer(nn.Module):
     def __init__(self, text_embed_size, BEHRT, device, hidden_size=512):
         super(MultimodalTransformer, self).__init__()
@@ -214,12 +204,11 @@ class MultimodalTransformer(nn.Module):
             nn.Linear(text_embed_size, 256),
             nn.ReLU()
         )
-        # Output three logits: mortality, LOS, mechanical ventilation.
         self.classifier = nn.Sequential(
             nn.Linear(256 + 256, hidden_size),
             nn.ReLU(),
             nn.Dropout(0.1),
-            nn.Linear(hidden_size, 3)
+            nn.Linear(hidden_size, 3)  # Predict three outcomes: mortality, LOS, mechanical ventilation.
         )
 
     def forward(self, dummy_input_ids, dummy_attn_mask, 
@@ -249,6 +238,14 @@ def train_step(model, dataloader, optimizer, device, crit_mort, crit_los, crit_v
          aggregated_text_embedding,
          labels_mortality, labels_los, labels_vent) = [x.to(device) for x in batch]
 
+        # Ensure target tensors have shape [batch, 1]
+        if labels_mortality.dim() == 1:
+            labels_mortality = labels_mortality.view(-1, 1)
+        if labels_los.dim() == 1:
+            labels_los = labels_los.view(-1, 1)
+        if labels_vent.dim() == 1:
+            labels_vent = labels_vent.view(-1, 1)
+
         optimizer.zero_grad()
         mortality_logits, los_logits, vent_logits = model(
             dummy_input_ids, dummy_attn_mask,
@@ -256,9 +253,9 @@ def train_step(model, dataloader, optimizer, device, crit_mort, crit_los, crit_v
             gender_ids, ethnicity_ids, insurance_ids,
             aggregated_text_embedding
         )
-        loss_mort = crit_mort(mortality_logits, labels_mortality.unsqueeze(1))
-        loss_los = crit_los(los_logits, labels_los.unsqueeze(1))
-        loss_vent = crit_vent(vent_logits, labels_vent.unsqueeze(1))
+        loss_mort = crit_mort(mortality_logits, labels_mortality)
+        loss_los = crit_los(los_logits, labels_los)
+        loss_vent = crit_vent(vent_logits, labels_vent)
         loss = loss_mort + loss_los + loss_vent
         loss.backward()
         optimizer.step()
@@ -275,16 +272,21 @@ def evaluate_model_loss(model, dataloader, device, crit_mort, crit_los, crit_ven
              gender_ids, ethnicity_ids, insurance_ids,
              aggregated_text_embedding,
              labels_mortality, labels_los, labels_vent) = [x.to(device) for x in batch]
-
+            if labels_mortality.dim() == 1:
+                labels_mortality = labels_mortality.view(-1, 1)
+            if labels_los.dim() == 1:
+                labels_los = labels_los.view(-1, 1)
+            if labels_vent.dim() == 1:
+                labels_vent = labels_vent.view(-1, 1)
             mort_logits, los_logits, mech_logits = model(
                 dummy_input_ids, dummy_attn_mask,
                 age_ids, segment_ids, adm_loc_ids, discharge_loc_ids,
                 gender_ids, ethnicity_ids, insurance_ids,
                 aggregated_text_embedding
             )
-            loss_mort = crit_mort(mort_logits, labels_mortality.unsqueeze(1))
-            loss_los = crit_los(los_logits, labels_los.unsqueeze(1))
-            loss_vent = crit_vent(mech_logits, labels_vent.unsqueeze(1))
+            loss_mort = crit_mort(mort_logits, labels_mortality)
+            loss_los = crit_los(los_logits, labels_los)
+            loss_vent = crit_vent(mech_logits, labels_vent)
             loss = loss_mort + loss_los + loss_vent
             running_loss += loss.item()
     return running_loss / len(dataloader)
@@ -307,7 +309,6 @@ def evaluate_model_metrics(model, dataloader, device, threshold=0.5, print_eddi=
              gender_ids, ethnicity_ids, insurance_ids,
              aggregated_text_embedding,
              labels_mortality, labels_los, labels_vent) = [x.to(device) for x in batch]
-
             mort_logits, los_logits, mech_logits = model(
                 dummy_input_ids, dummy_attn_mask,
                 age_ids, segment_ids, adm_loc_ids, discharge_loc_ids,
@@ -365,7 +366,6 @@ def evaluate_model_metrics(model, dataloader, device, threshold=0.5, print_eddi=
                          "tpr": TPR, "fpr": FPR}
 
     if print_eddi:
-        # Fixed subgroup orders for printing.
         age_order_list = ["15-29", "30-49", "50-69", "70-89", "Other"]
         ethnicity_order_list = ["white", "black", "asian", "hispanic", "other"]
         insurance_order_list = ["government", "medicare", "medicaid", "private", "self pay", "other"]
@@ -416,12 +416,16 @@ def evaluate_model_metrics(model, dataloader, device, threshold=0.5, print_eddi=
     return metrics
 
 # Adv_Model Class (Adversarial Debiasing)
+import itertools
+
 hyperparameter_list = ['learning_rate', 'num_iters', 'num_nodes', 'num_nodes_adv', 'dropout_rate', 'alpha']
+get_new_control_indices = False
+use_data_as_is = False
 
 class Adv_Model(object):
     def __init__(self, params):
         self.params = params
-        self.method = self.params['method']  # 'basic' or 'adv'
+        self.method = self.params['method']
         self.adversarial = self.method != 'basic'
         self.num_classes = self.params['num_classes']
         self.hyperparameters = self.params['hyperparameters']
@@ -461,20 +465,16 @@ class Adv_Model(object):
 
     def data_processing(self):
         data = dict()
-        Xtrain = self.params['Xtrain']
-        ytrain = self.params['ytrain']
-        Xvalid = self.params['Xvalid']
-        yvalid = self.params['yvalid']
-        data['Xtrain'] = torch.tensor(Xtrain.values).float()
-        data['ytrain'] = torch.tensor(ytrain.values.reshape(ytrain.shape[0], 1)).float()
-        data['Xvalid'] = torch.tensor(Xvalid.values).float()
-        data['yvalid'] = torch.tensor(yvalid.values.reshape(yvalid.shape[0], 1)).float()
+        data['Xtrain'] = self.params['Xtrain']
+        data['ytrain'] = self.params['ytrain']
+        data['Xvalid'] = self.params['Xvalid']
+        data['yvalid'] = self.params['yvalid']
         if self.num_classes > 2:
-            data['ztrain'] = torch.tensor(self.params['ztrain'].values.reshape(-1)).long()
-            data['zvalid'] = torch.tensor(self.params['zvalid'].values.reshape(-1)).long()
+            data['ztrain'] = self.params['ztrain']
+            data['zvalid'] = self.params['zvalid']
         else:
-            data['ztrain'] = torch.tensor(self.params['ztrain'].values.reshape(-1)).float()
-            data['zvalid'] = torch.tensor(self.params['zvalid'].values.reshape(-1)).float()
+            data['ztrain'] = self.params['ztrain']
+            data['zvalid'] = self.params['zvalid']
         return data
 
     def build_model(self):
@@ -500,7 +500,7 @@ class Adv_Model(object):
         if self.adversarial:
             num_nodes_adv = self.hyperparameters['num_nodes_adv'][indexes[3]]
             num_nodes_out = self.num_classes if self.num_classes > 2 else 1
-            n_adv = 2  # adversary input is concatenation of predictor output and label.
+            n_adv = 2  # predictor output and label concatenated.
             if self.num_classes > 2:
                 model['adversarial_model'] = nn.Sequential(
                     nn.Linear(n_adv, num_nodes_adv),
@@ -532,18 +532,17 @@ class Adv_Model(object):
         model = model_dict['model']
         loss_function = model_dict['loss_function']
         optimizer = model_dict['optimizer']
-        Xtrain = self.data['Xtrain']
-        ytrain = self.data['ytrain']
-        Xvalid = self.data['Xvalid']
-        yvalid = self.data['yvalid']
-        ztrain = self.data['ztrain']
+        Xtrain = torch.tensor(self.params['Xtrain'].values).float()
+        ytrain = torch.tensor(self.params['ytrain'].values).float().view(-1, 1)
+        Xvalid = torch.tensor(self.params['Xvalid'].values).float()
+        yvalid = torch.tensor(self.params['yvalid'].values).float().view(-1, 1)
+        ztrain = torch.tensor(self.params['ztrain'].values).long().view(-1)
 
-        # Dummy control matching procedure.
         if not use_data_as_is:
             idx_case = [i for i in range(len(ytrain)) if ytrain[i] == 1]
             idx_control = [i for i in range(len(ytrain)) if ytrain[i] == 0]
             match_number = 20
-            if get_new_control_indices:
+            if get_new_control_indices or not os.path.exists('control_indices.pkl'):
                 matched_cohort_indices = []
                 for i in idx_case:
                     matched = random.sample(idx_control, min(match_number, len(idx_control)))
@@ -557,13 +556,16 @@ class Adv_Model(object):
             ytrain = torch.cat((ytrain[matched_cohort_indices, :], ytrain[idx_case, :]), dim=0)
             ztrain = torch.cat((ztrain[matched_cohort_indices], ztrain[idx_case]), dim=0)
 
-        # Resample using SMOTEENN.
+        # --- Resample X, y, and z together ---
         from imblearn.combine import SMOTEENN
         from imblearn.under_sampling import EditedNearestNeighbours
         resample = SMOTEENN(enn=EditedNearestNeighbours(sampling_strategy='majority'), random_state=25)
-        Xtrain_np, ytrain_np = resample.fit_resample(Xtrain.numpy(), ytrain.numpy())
-        Xtrain = torch.tensor(Xtrain_np).float()
-        ytrain = torch.tensor(ytrain_np).float()
+        # Concatenate ztrain as an extra column to Xtrain
+        Xz = np.concatenate((Xtrain.numpy(), ztrain.numpy().reshape(-1, 1)), axis=1)
+        Xz_res, ytrain_res = resample.fit_resample(Xz, ytrain.numpy())
+        Xtrain = torch.tensor(Xz_res[:, :-1]).float()
+        ztrain = torch.tensor(Xz_res[:, -1]).long()
+        ytrain = torch.tensor(ytrain_res).float().view(-1, 1)
 
         if self.adversarial:
             adv_model = model_dict['adversarial_model']
@@ -580,8 +582,8 @@ class Adv_Model(object):
             if self.adversarial:
                 adv_input_train = torch.cat((ypred_train, ytrain), dim=1)
                 zpred_train = adv_model(adv_input_train)
-                adv_loss_train = adv_loss_function(zpred_train.squeeze(), ztrain.long())
-                combined_loss_train = loss_train - self.hyperparameters['alpha'][indexes[5]] * adv_loss_train + loss_train/(adv_loss_train + 1e-8)
+                adv_loss_train = adv_loss_function(zpred_train.squeeze(), ztrain.float())
+                combined_loss_train = loss_train - self.hyperparameters['alpha'][indexes[5]] * adv_loss_train + loss_train/(adv_loss_train+1e-8)
             else:
                 combined_loss_train = loss_train
 
@@ -595,14 +597,13 @@ class Adv_Model(object):
                 adv_optimizer.step()
             train_loss_list.append(combined_loss_train.item())
 
-            # Validation step.
             ypred_valid = model(Xvalid)
             loss_valid = loss_function(ypred_valid, yvalid)
             if self.adversarial:
                 adv_input_valid = torch.cat((ypred_valid, yvalid), dim=1)
                 zpred_valid = adv_model(adv_input_valid)
-                adv_loss_valid = adv_loss_function(zpred_valid.squeeze(), self.data['zvalid'].long())
-                combined_loss_valid = loss_valid - self.hyperparameters['alpha'][indexes[5]] * adv_loss_valid + loss_valid/(adv_loss_valid + 1e-8)
+                adv_loss_valid = adv_loss_function(zpred_valid.squeeze(), torch.tensor(self.params['zvalid'].values).long())
+                combined_loss_valid = loss_valid - self.hyperparameters['alpha'][indexes[5]] * adv_loss_valid + loss_valid/(adv_loss_valid+1e-8)
             else:
                 combined_loss_valid = loss_valid
             valid_loss_list.append(combined_loss_valid.item())
@@ -635,9 +636,9 @@ class Adv_Model(object):
 
     def evaluate_single_model(self, indexes):
         model = self.model[indexes]['model']
-        Xvalid = self.data['Xvalid']
-        yvalid = self.data['yvalid']
-        zvalid = self.data['zvalid']
+        Xvalid = torch.tensor(self.params['Xvalid'].values).float()
+        yvalid = torch.tensor(self.params['yvalid'].values).float().view(-1, 1)
+        zvalid = torch.tensor(self.params['zvalid'].values).long().view(-1)
         ypred_valid = model(Xvalid)
         zpred_valid = None
         if self.adversarial:
@@ -649,9 +650,35 @@ class Adv_Model(object):
                               zpred=zpred_valid.data.numpy() if zpred_valid is not None else None)
         return pd.DataFrame(metrics, index=[0])
 
+# get_metrics Function for Evaluation
+def get_metrics(ypred, y, z, hyperparameters, k=7, yselect=0, eval_file=None, zpred=None):
+    metrics = dict()
+    metrics['eval_file'] = eval_file
+    hyperparameter_list = ['learning_rate', 'num_iters', 'num_nodes', 'num_nodes_adv', 'dropout_rate', 'alpha']
+    for i in range(len(hyperparameter_list)):
+        metrics[hyperparameter_list[i]] = hyperparameters[i]
+
+    pred = (ypred >= 0.5)
+    true_pos = np.sum((pred == 1) & (y == 1))
+    true_neg = np.sum((pred == 0) & (y == 0))
+    false_pos = np.sum((pred == 1) & (y == 0))
+    false_neg = np.sum((pred == 0) & (y == 1))
+    metrics['accuracy'] = accuracy_score(y, pred)
+    metrics['recall'] = true_pos / (true_pos + false_neg) if (true_pos + false_neg) > 0 else 0
+    metrics['precision'] = true_pos / (true_pos + false_pos) if (true_pos + false_pos) > 0 else 0
+    metrics['specificity'] = true_neg / (true_neg + false_pos) if (true_neg + false_pos) > 0 else 0
+    prev = 0.05
+    metrics['ppv'] = (metrics['recall'] * prev) / (metrics['recall'] * prev + (1 - metrics['specificity']) * (1 - prev))
+    metrics['npv'] = (metrics['specificity'] * (1 - prev)) / (metrics['specificity'] * (1 - prev) + (1 - metrics['recall']) * prev)
+    metrics['f1score'] = 2 * (metrics['precision'] * metrics['recall']) / (metrics['precision'] + metrics['recall'] + 1e-8)
+    try:
+        metrics['roc_auc'] = roc_auc_score(y, pred)
+    except Exception:
+        metrics['roc_auc'] = float('nan')
+    return metrics
+
 
 if __name__ == '__main__':
-    # Load structured and unstructured data.
     structured_data = pd.read_csv('final_structured_common.csv')
     unstructured_data = pd.read_csv('final_unstructured_common.csv', low_memory=False)
 
@@ -703,9 +730,7 @@ if __name__ == '__main__':
     if "segment" not in df_unique.columns:
         df_unique["segment"] = 0
 
-    # Initialize BioClinicalBERT for text processing.
     tokenizer = AutoTokenizer.from_pretrained("emilyalsentzer/Bio_ClinicalBERT")
-    # Move pretrained model to device.
     bioclinical_bert_base = BertModel.from_pretrained("emilyalsentzer/Bio_ClinicalBERT").to(device)
     bioclinical_bert_ft = BioClinicalBERT_FT(bioclinical_bert_base, bioclinical_bert_base.config, device).to(device)
     aggregated_text_embeddings_np = apply_bioclinicalbert_on_patient_notes(df_unique, note_columns, tokenizer, bioclinical_bert_ft, device, aggregation="mean")
@@ -723,50 +748,22 @@ if __name__ == '__main__':
                         "short_term_mortality", "los_binary", "mechanical_ventilation",
                         "age", "first_wardid", "last_wardid", "ethnicity", "insurance", "gender"])
     lab_feature_columns = [col for col in df_unique.columns 
-                           if col not in exclude_cols and not col.startswith("note_")
+                           if col not in exclude_cols and not col.startswith("note_") 
                            and pd.api.types.is_numeric_dtype(df_unique[col])]
     print("Number of lab feature columns:", len(lab_feature_columns))
     df_unique[lab_feature_columns] = df_unique[lab_feature_columns].fillna(0)
+    X_df = df_unique[lab_feature_columns].copy()
+    y_df = df_unique[["short_term_mortality"]].copy()
+    z_df = df_unique[["ethnicity"]].copy()  # sensitive attribute
 
-    num_samples = len(df_unique)
-    dummy_input_ids = torch.zeros((num_samples, 1), dtype=torch.long)
-    dummy_attn_mask = torch.ones((num_samples, 1), dtype=torch.long)
+    # Convert binary outcome into a multilabel indicator (one-hot encoded)
+    y_values = y_df.values.astype(int).reshape(-1)
+    labels_array = np.concatenate([(y_values == 0).astype(int).reshape(-1,1),
+                                   (y_values == 1).astype(int).reshape(-1,1)], axis=1)
 
-    age_ids = torch.tensor(df_unique["age"].values, dtype=torch.long)
-    segment_ids = torch.tensor(df_unique["segment"].values, dtype=torch.long)
-    admission_loc_ids = torch.tensor(df_unique["first_wardid"].values, dtype=torch.long)
-    discharge_loc_ids = torch.tensor(df_unique["last_wardid"].values, dtype=torch.long)
-    gender_ids = torch.tensor(df_unique["gender"].values, dtype=torch.long)
-    ethnicity_ids = torch.tensor(df_unique["ethnicity"].values, dtype=torch.long)
-    insurance_ids = torch.tensor(df_unique["insurance"].values, dtype=torch.long)
-
-    labels_mortality = torch.tensor(df_unique["short_term_mortality"].values, dtype=torch.float32)
-    labels_los = torch.tensor(df_unique["los_binary"].values, dtype=torch.float32)
-    labels_vent = torch.tensor(df_unique["mechanical_ventilation"].values, dtype=torch.float32)
-
-    mortality_pos_weight = get_pos_weight(df_filtered["short_term_mortality"], device)
-    los_pos_weight = get_pos_weight(df_filtered["los_binary"], device)
-    mech_pos_weight = get_pos_weight(df_filtered["mechanical_ventilation"], device)
-    criterion_mortality = FocalLoss(gamma=1, pos_weight=mortality_pos_weight, reduction='mean')
-    criterion_los = FocalLoss(gamma=1, pos_weight=los_pos_weight, reduction='mean')
-    criterion_mech = FocalLoss(gamma=1, pos_weight=mech_pos_weight, reduction='mean')
-
-    dataset = TensorDataset(
-        dummy_input_ids, dummy_attn_mask,
-        age_ids, segment_ids, admission_loc_ids, discharge_loc_ids,
-        gender_ids, ethnicity_ids, insurance_ids,
-        aggregated_text_embeddings_t,
-        labels_mortality, labels_los, labels_vent
-    )
-
-    labels_array = df_unique[["short_term_mortality", "los_binary", "mechanical_ventilation"]].values
     msss = MultilabelStratifiedShuffleSplit(n_splits=1, test_size=0.2, random_state=42)
     train_val_idx, test_idx = next(msss.split(df_unique, labels_array))
     print("Train/Val samples:", len(train_val_idx), "Test samples:", len(test_idx))
-
-    train_val_dataset = Subset(dataset, train_val_idx)
-    test_dataset = Subset(dataset, test_idx)
-
     labels_train_val = labels_array[train_val_idx]
     msss_val = MultilabelStratifiedShuffleSplit(n_splits=1, test_size=0.05, random_state=42)
     train_idx_rel, val_idx_rel = next(msss_val.split(np.zeros(len(train_val_idx)), labels_train_val))
@@ -774,14 +771,56 @@ if __name__ == '__main__':
     val_idx = [train_val_idx[i] for i in val_idx_rel]
     print(f"Final split -> Train: {len(train_idx)}, Validation: {len(val_idx)}, Test: {len(test_idx)}")
 
-    train_dataset = Subset(dataset, train_idx)
-    val_dataset = Subset(dataset, val_idx)
+    train_dataset = Subset(TensorDataset(
+        torch.zeros((len(df_unique), 1), dtype=torch.long),  # dummy_input_ids
+        torch.ones((len(df_unique), 1), dtype=torch.long),   # dummy_attn_mask
+        torch.tensor(df_unique["age"].values, dtype=torch.long),
+        torch.tensor(df_unique["segment"].values, dtype=torch.long),
+        torch.tensor(df_unique["first_wardid"].values, dtype=torch.long),
+        torch.tensor(df_unique["last_wardid"].values, dtype=torch.long),
+        torch.tensor(df_unique["gender"].values, dtype=torch.long),
+        torch.tensor(df_unique["ethnicity"].values, dtype=torch.long),
+        torch.tensor(df_unique["insurance"].values, dtype=torch.long),
+        aggregated_text_embeddings_t,
+        torch.tensor(y_df.values.reshape(-1,1), dtype=torch.float32),
+        torch.tensor(df_unique["los_binary"].values.reshape(-1,1), dtype=torch.float32),
+        torch.tensor(df_unique["mechanical_ventilation"].values.reshape(-1,1), dtype=torch.float32)
+    ), train_idx)
+    val_dataset = Subset(TensorDataset(
+        torch.zeros((len(df_unique), 1), dtype=torch.long),
+        torch.ones((len(df_unique), 1), dtype=torch.long),
+        torch.tensor(df_unique["age"].values, dtype=torch.long),
+        torch.tensor(df_unique["segment"].values, dtype=torch.long),
+        torch.tensor(df_unique["first_wardid"].values, dtype=torch.long),
+        torch.tensor(df_unique["last_wardid"].values, dtype=torch.long),
+        torch.tensor(df_unique["gender"].values, dtype=torch.long),
+        torch.tensor(df_unique["ethnicity"].values, dtype=torch.long),
+        torch.tensor(df_unique["insurance"].values, dtype=torch.long),
+        aggregated_text_embeddings_t,
+        torch.tensor(y_df.values.reshape(-1,1), dtype=torch.float32),
+        torch.tensor(df_unique["los_binary"].values.reshape(-1,1), dtype=torch.float32),
+        torch.tensor(df_unique["mechanical_ventilation"].values.reshape(-1,1), dtype=torch.float32)
+    ), val_idx)
+    test_dataset = Subset(TensorDataset(
+        torch.zeros((len(df_unique), 1), dtype=torch.long),
+        torch.ones((len(df_unique), 1), dtype=torch.long),
+        torch.tensor(df_unique["age"].values, dtype=torch.long),
+        torch.tensor(df_unique["segment"].values, dtype=torch.long),
+        torch.tensor(df_unique["first_wardid"].values, dtype=torch.long),
+        torch.tensor(df_unique["last_wardid"].values, dtype=torch.long),
+        torch.tensor(df_unique["gender"].values, dtype=torch.long),
+        torch.tensor(df_unique["ethnicity"].values, dtype=torch.long),
+        torch.tensor(df_unique["insurance"].values, dtype=torch.long),
+        aggregated_text_embeddings_t,
+        torch.tensor(y_df.values.reshape(-1,1), dtype=torch.float32),
+        torch.tensor(df_unique["los_binary"].values.reshape(-1,1), dtype=torch.float32),
+        torch.tensor(df_unique["mechanical_ventilation"].values.reshape(-1,1), dtype=torch.float32)
+    ), test_idx)
 
     train_loader = DataLoader(train_dataset, batch_size=16, shuffle=True)
     val_loader = DataLoader(val_dataset, batch_size=16, shuffle=False)
     test_loader = DataLoader(test_dataset, batch_size=16, shuffle=False)
 
-    # Derive hyperparameters from data.
     disease_mapping = {d: i for i, d in enumerate(df_unique["hadm_id"].unique())}
     NUM_DISEASES = len(disease_mapping)
     NUM_AGES = df_unique["age"].nunique()
@@ -829,6 +868,13 @@ if __name__ == '__main__':
     patience_counter = 0
     early_stop_patience = 5
     best_model_path = "best_multimodal_model.pt"
+
+    mortality_pos_weight = get_pos_weight(df_filtered["short_term_mortality"], device)
+    los_pos_weight = get_pos_weight(df_filtered["los_binary"], device)
+    mech_pos_weight = get_pos_weight(df_filtered["mechanical_ventilation"], device)
+    criterion_mortality = FocalLoss(gamma=1, pos_weight=mortality_pos_weight, reduction='mean')
+    criterion_los = FocalLoss(gamma=1, pos_weight=los_pos_weight, reduction='mean')
+    criterion_mech = FocalLoss(gamma=1, pos_weight=mech_pos_weight, reduction='mean')
 
     for epoch in range(num_epochs):
         multimodal_model.train()
@@ -882,19 +928,19 @@ if __name__ == '__main__':
             print("  Aggregated Ethnicity EDDI: {:.4f}".format(stats["ethnicity_eddi"]))
             print("  Insurance subgroup EDDI:", stats["insurance_subgroup_eddi"])
             print("  Aggregated Insurance EDDI: {:.4f}".format(stats["insurance_eddi"]))
-            print("  Final Overall EDDI     : {:.4f}".format(stats["final_EDDI"]))
+            print("  Final Overall {} EDDI: {:.4f}".format(outcome.capitalize(), stats["final_EDDI"]))
 
     print("Training complete.")
-    
+
 if __name__ == "__main__":
     params = {
-        'Xtrain': pd.read_csv('Xtrain.csv'),
-        'ytrain': pd.read_csv('ytrain.csv'),
-        'Xvalid': pd.read_csv('Xvalid.csv'),
-        'yvalid': pd.read_csv('yvalid.csv'),
-        'ztrain': pd.read_csv('ztrain.csv'),
-        'zvalid': pd.read_csv('zvalid.csv'),
-        'method': 'adv',  # Set to 'adv' to use adversarial debiasing, 'basic' otherwise.
+        'Xtrain': X_df.iloc[train_idx].reset_index(drop=True),
+        'ytrain': y_df.iloc[train_idx].reset_index(drop=True),
+        'Xvalid': X_df.iloc[val_idx].reset_index(drop=True),
+        'yvalid': y_df.iloc[val_idx].reset_index(drop=True),
+        'ztrain': z_df.iloc[train_idx].reset_index(drop=True),
+        'zvalid': z_df.iloc[val_idx].reset_index(drop=True),
+        'method': 'adv',  # adversarial debiasing
         'num_classes': 2,
         'hyperparameters': {
             'learning_rate': [1e-4, 5e-5],
