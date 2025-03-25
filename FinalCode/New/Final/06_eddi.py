@@ -1,4 +1,3 @@
-import os
 import time
 import random
 import argparse
@@ -14,8 +13,8 @@ from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.utils.data import TensorDataset, DataLoader
 
 from transformers import BertModel, BertConfig, AutoTokenizer
-from sklearn.metrics import roc_auc_score, average_precision_score, f1_score, recall_score, precision_score
-from sklearn.model_selection import train_test_split
+from sklearn.metrics import roc_auc_score, average_precision_score, f1_score, recall_score, precision_score, confusion_matrix
+from iterstrat.ml_stratifiers import MultilabelStratifiedShuffleSplit 
 
 DEBUG = True
 
@@ -98,7 +97,6 @@ def compute_eddi(y_true, y_pred, sensitive_labels, threshold=0.5):
             subgroup_eddi[group] = (er_group - overall_error) / denom
     eddi_attr = np.sqrt(np.sum(np.array(list(subgroup_eddi.values())) ** 2)) / len(unique_groups)
     return eddi_attr, subgroup_eddi
-
 
 # BioClinicalBERT Fine-Tuning and Note Aggregation
 class BioClinicalBERT_FT(nn.Module):
@@ -331,31 +329,7 @@ def validate_step(model, dataloader, device, beta=1.0, loss_gamma=1.0, target=1.
             running_loss += loss.item()
     return running_loss
 
-def validate_step(model, dataloader, device, criterion, beta=1.0, loss_gamma=1.0, target=1.0):
-    model.eval()
-    running_loss = 0.0
-    with torch.no_grad():
-        for batch in dataloader:
-            (demo_dummy_ids, demo_attn_mask,
-             age_ids, gender_ids, ethnicity_ids, insurance_ids,
-             lab_features,
-             aggregated_text_embedding,
-             labels_mortality, labels_los, labels_mechvent) = [x.to(device) for x in batch]
-
-            mortality_logit, los_logit, mechvent_logit, _ = model(
-                demo_dummy_ids, demo_attn_mask,
-                age_ids, gender_ids, ethnicity_ids, insurance_ids,
-                lab_features, aggregated_text_embedding, beta=beta
-            )
-            loss_mort = criterion(mortality_logit, labels_mortality.unsqueeze(1))
-            loss_los = criterion(los_logit, labels_los.unsqueeze(1))
-            loss_mech = criterion(mechvent_logit, labels_mechvent.unsqueeze(1))
-            eddi_loss = ((mortality_logit - target) ** 2).mean()
-            loss = loss_mort + loss_los + loss_mech + loss_gamma * eddi_loss
-            running_loss += loss.item()
-    return running_loss
-
-def evaluate_model(model, dataloader, device, threshold=0.5, print_eddi=False):
+def evaluate_model_with_confusion(model, dataloader, device, threshold=0.5):
     model.eval()
     all_mort_logits = []
     all_los_logits = []
@@ -404,8 +378,8 @@ def evaluate_model(model, dataloader, device, threshold=0.5, print_eddi=False):
     
     metrics = {}
     for task, probs, labels in zip(["mortality", "los", "mechanical_ventilation"],
-                                    [mort_probs, los_probs, mech_probs],
-                                    [labels_mort_np, labels_los_np, labels_mech_np]):
+                                     [mort_probs, los_probs, mech_probs],
+                                     [labels_mort_np, labels_los_np, labels_mech_np]):
         try:
             aucroc = roc_auc_score(labels, probs)
         except Exception:
@@ -416,10 +390,16 @@ def evaluate_model(model, dataloader, device, threshold=0.5, print_eddi=False):
             auprc = float('nan')
         preds = (probs > threshold).astype(int)
         f1 = f1_score(labels, preds, zero_division=0)
-        recall = recall_score(labels, preds, zero_division=0)
-        precision = precision_score(labels, preds, zero_division=0)
+        recall_val = recall_score(labels, preds, zero_division=0)
+        precision_val = precision_score(labels, preds, zero_division=0)
+        # Force confusion_matrix to return counts for both classes by specifying labels=[0,1]
+        tn, fp, fn, tp = confusion_matrix(labels, preds, labels=[0,1]).ravel()
+        tpr = tp / (tp + fn) if (tp + fn) > 0 else 0
+        fpr = fp / (fp + tn) if (fp + tn) > 0 else 0
+        
         metrics[task] = {"aucroc": aucroc, "auprc": auprc, "f1": f1,
-                         "recall": recall, "precision": precision}
+                         "recall": recall_val, "precision": precision_val,
+                         "tpr": tpr, "fpr": fpr}
     
     # Get sensitive attribute groups.
     ages = torch.cat(all_age, dim=0).numpy().squeeze()
@@ -430,12 +410,6 @@ def evaluate_model(model, dataloader, device, threshold=0.5, print_eddi=False):
     ethnicity_groups = np.array([map_ethnicity(e) for e in ethnicities])
     insurance_groups = np.array([map_insurance(i) for i in insurances])
     
-    # Fixed subgroup orders.
-    age_order = ["15-29", "30-49", "50-69", "70-89", "Other"]
-    ethnicity_order = ["white", "black", "asian", "hispanic", "other"]
-    insurance_order = ["government", "medicare", "Medicaid", "private", "self pay", "other"]
-    
-    # Compute EDDI for each outcome.
     eddi_stats = {}
     for task, labels_np, probs in zip(["mortality", "los", "mechanical_ventilation"],
                                       [labels_mort_np, labels_los_np, labels_mech_np],
@@ -444,25 +418,20 @@ def evaluate_model(model, dataloader, device, threshold=0.5, print_eddi=False):
         overall_eth, eth_eddi_sub = compute_eddi(labels_np.astype(int), probs, ethnicity_groups, threshold)
         overall_ins, ins_eddi_sub = compute_eddi(labels_np.astype(int), probs, insurance_groups, threshold)
         total_eddi = np.sqrt((overall_age**2 + overall_eth**2 + overall_ins**2)) / 3
-        eddi_stats[task] = {
-            "age_eddi": overall_age,
-            "age_subgroup_eddi": age_eddi_sub,
-            "ethnicity_eddi": overall_eth,
-            "ethnicity_subgroup_eddi": eth_eddi_sub,
-            "insurance_eddi": overall_ins,
-            "insurance_subgroup_eddi": ins_eddi_sub,
-            "final_EDDI": total_eddi
-        }
+        eddi_stats[task] = {"age_eddi": overall_age,
+                            "age_subgroup_eddi": age_eddi_sub,
+                            "ethnicity_eddi": overall_eth,
+                            "ethnicity_subgroup_eddi": eth_eddi_sub,
+                            "insurance_eddi": overall_ins,
+                            "insurance_subgroup_eddi": ins_eddi_sub,
+                            "final_EDDI": total_eddi}
     
     metrics["eddi_stats"] = eddi_stats
-    
-    unique_subgroups = {
-        "age": list(np.unique(age_groups)),
-        "ethnicity": list(np.unique(ethnicity_groups)),
-        "insurance": list(np.unique(insurance_groups))
-    }
-    
-    return metrics, all_mort_logits, unique_subgroups
+    return metrics
+
+def evaluate_model(model, dataloader, device, threshold=0.5, print_eddi=False):
+    metrics = evaluate_model_with_confusion(model, dataloader, device, threshold)
+    return metrics
 
 def train_pipeline():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -503,10 +472,20 @@ def train_pipeline():
     df_filtered = merged_df[merged_df.apply(has_valid_note, axis=1)].copy()
     print("After filtering, number of rows:", len(df_filtered))
 
-    # 80% training and 20% testing
-    train_val_df, test_df = train_test_split(df_filtered, test_size=0.2, random_state=42)
-    # From training data, hold out 5% for validation
-    train_df, val_df = train_test_split(train_val_df, test_size=0.05, random_state=42)
+    # Multi-label stratification based on the three outcomes
+    labels = df_filtered[['short_term_mortality', 'los_binary', 'mechanical_ventilation']].values
+    msss = MultilabelStratifiedShuffleSplit(n_splits=1, test_size=0.2, random_state=42)
+    for train_val_idx, test_idx in msss.split(df_filtered, labels):
+        train_val_df = df_filtered.iloc[train_val_idx]
+        test_df = df_filtered.iloc[test_idx]
+    
+    # Further stratify the train_val set into train and validation (5% for validation)
+    labels_train_val = train_val_df[['short_term_mortality', 'los_binary', 'mechanical_ventilation']].values
+    msss_val = MultilabelStratifiedShuffleSplit(n_splits=1, test_size=0.05, random_state=42)
+    for train_idx, val_idx in msss_val.split(train_val_df, labels_train_val):
+        train_df = train_val_df.iloc[train_idx]
+        val_df = train_val_df.iloc[val_idx]
+    
     print(f"Train size: {len(train_df)}, Validation size: {len(val_df)}, Test size: {len(test_df)}")
 
     # Compute Aggregated Text Embeddings for each split 
@@ -630,29 +609,43 @@ def train_pipeline():
     mech_pos_weight = get_pos_weight(df_filtered["mechanical_ventilation"], device)
 
     # Define separate FocalLoss criteria for each task with gamma set to 1
+    global criterion_mortality, criterion_los, criterion_mech
     criterion_mortality = FocalLoss(gamma=1, pos_weight=mortality_pos_weight, reduction='mean')
     criterion_los = FocalLoss(gamma=1, pos_weight=los_pos_weight, reduction='mean')
     criterion_mech = FocalLoss(gamma=1, pos_weight=mech_pos_weight, reduction='mean')
 
     max_epochs = 20
     patience_limit = 5  
-    beta_value = 0.3   # Example beta value; adjust as needed
+    beta_value = 0.3   
     loss_gamma = 1.0
 
     best_val_loss = float('inf')
     epochs_no_improve = 0
 
-    # Training Loop with Early Stopping 
+    # Training Loop with Early Stopping and detailed evaluation metrics printing per epoch
     for epoch in range(max_epochs):
         train_loss = train_step(multimodal_model, train_loader, optimizer, device,
-                                criterion, beta=beta_value, loss_gamma=loss_gamma, target=1.0)
+                                beta=beta_value, loss_gamma=loss_gamma, target=1.0)
         train_loss_epoch = train_loss / len(train_loader)
         
         val_loss = validate_step(multimodal_model, val_loader, device,
-                                 criterion, beta=beta_value, loss_gamma=loss_gamma, target=1.0)
+                                 beta=beta_value, loss_gamma=loss_gamma, target=1.0)
         val_loss_epoch = val_loss / len(val_loader)
         
+        # Evaluate on validation set and get detailed metrics.
+        val_metrics = evaluate_model_with_confusion(multimodal_model, val_loader, device, threshold=0.5)
+        
         print(f"[Epoch {epoch+1}] Train Loss: {train_loss_epoch:.4f} | Val Loss: {val_loss_epoch:.4f}")
+        # Print metrics for each outcome.
+        for outcome in ["mortality", "los", "mechanical_ventilation"]:
+            m = val_metrics[outcome]
+            print(f"  {outcome.capitalize()}: AUROC={m['aucroc']:.4f}, AUPRC={m['auprc']:.4f}, F1={m['f1']:.4f}, "
+                  f"Recall={m['recall']:.4f}, Precision={m['precision']:.4f}, TPR={m['tpr']:.4f}, FPR={m['fpr']:.4f}")
+        # Print EDDI for each outcome.
+        for outcome in ["mortality", "los", "mechanical_ventilation"]:
+            eddi = val_metrics["eddi_stats"][outcome]["final_EDDI"]
+            print(f"  {outcome.capitalize()} EDDI: {eddi:.4f}")
+        
         scheduler.step(val_loss_epoch)
         
         # Early stopping check
@@ -672,7 +665,7 @@ def train_pipeline():
     
     # Load the best model and evaluate on the test set.
     multimodal_model.load_state_dict(torch.load("best_model.pth"))
-    final_metrics, mort_logits, unique_subgroups = evaluate_model(multimodal_model, test_loader, device, threshold=0.5, print_eddi=True)
+    final_metrics = evaluate_model(multimodal_model, test_loader, device, threshold=0.5)
     
     print("\n--- Unique Subgroups (Fixed Order) ---")
     print("Age subgroups      :", ["15-29", "30-49", "50-69", "70-89", "Other"])
