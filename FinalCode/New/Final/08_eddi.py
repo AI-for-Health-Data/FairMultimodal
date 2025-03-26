@@ -4,19 +4,18 @@ import argparse
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.utils.data import TensorDataset, DataLoader
-
 from transformers import BertModel, BertConfig, AutoTokenizer
 from sklearn.metrics import roc_auc_score, average_precision_score, f1_score, recall_score, precision_score, confusion_matrix
 from iterstrat.ml_stratifiers import MultilabelStratifiedShuffleSplit 
 
 DEBUG = True
+
 
 # Focal Loss definition
 class FocalLoss(nn.Module):
@@ -41,6 +40,7 @@ class FocalLoss(nn.Module):
             return focal_loss.sum()
         else:
             return focal_loss
+
 
 # Fairness EDDI function used in evaluation
 def compute_eddi(y_true, y_pred, sensitive_labels, threshold=0.5):
@@ -196,7 +196,7 @@ class BEHRTModel_Lab(nn.Module):
         lab_embedding = x.mean(dim=1)
         return lab_embedding
 
-# Updated Multimodal Transformer for Fusion with Modality Weighting Using EDDI
+# Updated Multimodal Transformer with Three Outcome Predictions
 class MultimodalTransformer(nn.Module):
     def __init__(self, text_embed_size, behrt_demo, behrt_lab, device):
         super(MultimodalTransformer, self).__init__()
@@ -204,7 +204,7 @@ class MultimodalTransformer(nn.Module):
         self.behrt_lab = behrt_lab
         self.device = device
 
-        # Projectors: map each modality embedding to a 256-dimensional space.
+        # Shared modality projectors (maps modality embeddings to 256-dim vectors)
         self.demo_projector = nn.Sequential(
             nn.Linear(behrt_demo.bert.config.hidden_size, 256),
             nn.ReLU()
@@ -218,75 +218,81 @@ class MultimodalTransformer(nn.Module):
             nn.ReLU()
         )
 
-        # Classification layers for each modality (for obtaining y_pred per modality).
-        self.classifier_demo = nn.Linear(256, 1)
-        self.classifier_lab = nn.Linear(256, 1)
-        self.classifier_text = nn.Linear(256, 1)
- 
+        # Outcome-specific classification heads.
+        # Mortality
+        self.classifier_demo_mort = nn.Linear(256, 1)
+        self.classifier_lab_mort = nn.Linear(256, 1)
+        self.classifier_text_mort = nn.Linear(256, 1)
+        # LOS
+        self.classifier_demo_los = nn.Linear(256, 1)
+        self.classifier_lab_los = nn.Linear(256, 1)
+        self.classifier_text_los = nn.Linear(256, 1)
+        # Ventilation
+        self.classifier_demo_mv = nn.Linear(256, 1)
+        self.classifier_lab_mv = nn.Linear(256, 1)
+        self.classifier_text_mv = nn.Linear(256, 1)
+
+    def compute_weighted_logit(self, demo_proj, lab_proj, text_proj, 
+                               classifier_demo, classifier_lab, classifier_text, beta):
+        # Compute modality-specific scalar values (used as surrogate EDDI) by summing features.
+        eddi_demo = torch.sum(demo_proj, dim=1, keepdim=True)
+        eddi_lab  = torch.sum(lab_proj, dim=1, keepdim=True)
+        eddi_text = torch.sum(text_proj, dim=1, keepdim=True)
+        eddi_max, _ = torch.max(torch.cat([eddi_demo, eddi_lab, eddi_text], dim=1), dim=1, keepdim=True)
+        weight_demo = 0.33 + beta * (eddi_max - eddi_demo)
+        weight_lab  = 0.33 + beta * (eddi_max - eddi_lab)
+        weight_text = 0.33 + beta * (eddi_max - eddi_text)
+        # Get modality-specific logits for this outcome.
+        logit_demo = classifier_demo(demo_proj)
+        logit_lab  = classifier_lab(lab_proj)
+        logit_text = classifier_text(text_proj)
+        # Fuse the logits using computed weights.
+        fused_logit = logit_demo * weight_demo + logit_lab * weight_lab + logit_text * weight_text
+        # Also return individual modality logits (for computing fairness later if desired).
+        return fused_logit, {"eddi": (eddi_demo, eddi_lab, eddi_text, eddi_max),
+                             "weights": (weight_demo, weight_lab, weight_text),
+                             "probs": (torch.sigmoid(logit_demo), torch.sigmoid(logit_lab), torch.sigmoid(logit_text))}
+
     def forward(self, demo_dummy_ids, demo_attn_mask,
                 age_ids, gender_ids, ethnicity_ids, insurance_ids,
                 lab_features, aggregated_text_embedding, beta=1.0,
                 y_true=None, sensitive_labels=None):
-
-        # Get modality embeddings.
+        # Get base modality embeddings.
         demo_embedding = self.behrt_demo(demo_dummy_ids, demo_attn_mask,
                                          age_ids, gender_ids, ethnicity_ids, insurance_ids)
         lab_embedding = self.behrt_lab(lab_features)
         text_embedding = aggregated_text_embedding
 
-        # Project each modality to 256-dim.
+        # Project modality embeddings.
         demo_proj = self.demo_projector(demo_embedding)
         lab_proj  = self.lab_projector(lab_embedding)
         text_proj = self.text_projector(text_embedding)
 
-        # Obtain modality-specific classification logits.
-        demo_logit = self.classifier_demo(demo_proj)  # shape: [batch, 1]
-        lab_logit  = self.classifier_lab(lab_proj)    
-        text_logit = self.classifier_text(text_proj)    
+        # Compute fused logits for each outcome.
+        # Mortality
+        mort_logit, mort_details = self.compute_weighted_logit(demo_proj, lab_proj, text_proj,
+                                                               self.classifier_demo_mort,
+                                                               self.classifier_lab_mort,
+                                                               self.classifier_text_mort,
+                                                               beta)
+        # LOS
+        los_logit, los_details = self.compute_weighted_logit(demo_proj, lab_proj, text_proj,
+                                                             self.classifier_demo_los,
+                                                             self.classifier_lab_los,
+                                                             self.classifier_text_los,
+                                                             beta)
+        # Mechanical Ventilation
+        mv_logit, mv_details = self.compute_weighted_logit(demo_proj, lab_proj, text_proj,
+                                                           self.classifier_demo_mv,
+                                                           self.classifier_lab_mv,
+                                                           self.classifier_text_mv,
+                                                           beta)
 
-        # Convert logits to probabilities.
-        demo_prob = torch.sigmoid(demo_logit)
-        lab_prob  = torch.sigmoid(lab_logit)
-        text_prob = torch.sigmoid(text_logit)
-
-        if (y_true is not None) and (sensitive_labels is not None):
-            # Convert tensors to numpy arrays.
-            demo_prob_np = demo_prob.detach().cpu().numpy().squeeze()
-            lab_prob_np  = lab_prob.detach().cpu().numpy().squeeze()
-            text_prob_np = text_prob.detach().cpu().numpy().squeeze()
-            # Compute fairness EDDI for each modality 
-            eddi_demo_val, _ = compute_eddi(y_true, demo_prob_np, sensitive_labels, threshold=0.5)
-            eddi_lab_val, _  = compute_eddi(y_true, lab_prob_np, sensitive_labels, threshold=0.5)
-            eddi_text_val, _ = compute_eddi(y_true, text_prob_np, sensitive_labels, threshold=0.5)
-        else:
-            eddi_demo_val = 0.0
-            eddi_lab_val = 0.0
-            eddi_text_val = 0.0
-
-        # Determine the maximum EDDI across modalities.
-        eddi_max_val = max(eddi_demo_val, eddi_lab_val, eddi_text_val)
-
-        #   weight_mod = 0.33 + beta * (eddi_max_val - eddi_mod)
-        weight_demo = 0.33 + beta * (eddi_max_val - eddi_demo_val)
-        weight_lab  = 0.33 + beta * (eddi_max_val - eddi_lab_val)
-        weight_text = 0.33 + beta * (eddi_max_val - eddi_text_val)
-
-        # Fuse the modality logits.
-        final_logit = demo_logit * weight_demo + lab_logit * weight_lab + text_logit * weight_text
-
-        eddi_details = {
-            "eddi_demo": eddi_demo_val,
-            "eddi_lab": eddi_lab_val,
-            "eddi_text": eddi_text_val,
-            "eddi_max": eddi_max_val,
-            "weight_demo": weight_demo,
-            "weight_lab": weight_lab,
-            "weight_text": weight_text,
-            "demo_prob": demo_prob,   
-            "lab_prob": lab_prob,
-            "text_prob": text_prob
-        }
-        return final_logit, eddi_details
+        # Optionally, if y_true and sensitive_labels are provided,
+        eddi_details = {"mortality": mort_details,
+                        "los": los_details,
+                        "mechanical_ventilation": mv_details}
+        return mort_logit, los_logit, mv_logit, eddi_details
 
 # Training and Evaluation Functions
 def train_step(model, dataloader, optimizer, device, beta=1.0, loss_gamma=1.0, target=1.0):
@@ -300,16 +306,16 @@ def train_step(model, dataloader, optimizer, device, beta=1.0, loss_gamma=1.0, t
          labels_mortality, labels_los, labels_mechvent) = [x.to(device) for x in batch]
 
         optimizer.zero_grad()
-        mortality_logit, los_logit, mechvent_logit, _ = model(
+        mort_logit, los_logit, mv_logit, _ = model(
             demo_dummy_ids, demo_attn_mask,
             age_ids, gender_ids, ethnicity_ids, insurance_ids,
             lab_features, aggregated_text_embedding, beta=beta
         )
-        loss_mort = criterion_mortality(mortality_logit, labels_mortality.unsqueeze(1))
+        loss_mort = criterion_mortality(mort_logit, labels_mortality.unsqueeze(1))
         loss_los = criterion_los(los_logit, labels_los.unsqueeze(1))
-        loss_mech = criterion_mech(mechvent_logit, labels_mechvent.unsqueeze(1))
-        eddi_loss = ((mortality_logit - target) ** 2).mean()
-        loss = loss_mort + loss_los + loss_mech + loss_gamma * eddi_loss
+        loss_mv = criterion_mech(mv_logit, labels_mechvent.unsqueeze(1))
+        eddi_loss = ((mort_logit - target) ** 2).mean()  # Additional loss term (if desired)
+        loss = loss_mort + loss_los + loss_mv + loss_gamma * eddi_loss
 
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
@@ -328,30 +334,24 @@ def validate_step(model, dataloader, device, beta=1.0, loss_gamma=1.0, target=1.
              aggregated_text_embedding,
              labels_mortality, labels_los, labels_mechvent) = [x.to(device) for x in batch]
 
-            mortality_logit, los_logit, mechvent_logit, _ = model(
+            mort_logit, los_logit, mv_logit, _ = model(
                 demo_dummy_ids, demo_attn_mask,
                 age_ids, gender_ids, ethnicity_ids, insurance_ids,
                 lab_features, aggregated_text_embedding, beta=beta
             )
-            loss_mort = criterion_mortality(mortality_logit, labels_mortality.unsqueeze(1))
+            loss_mort = criterion_mortality(mort_logit, labels_mortality.unsqueeze(1))
             loss_los = criterion_los(los_logit, labels_los.unsqueeze(1))
-            loss_mech = criterion_mech(mechvent_logit, labels_mechvent.unsqueeze(1))
-            eddi_loss = ((mortality_logit - target) ** 2).mean()
-            loss = loss_mort + loss_los + loss_mech + loss_gamma * eddi_loss
+            loss_mv = criterion_mech(mv_logit, labels_mechvent.unsqueeze(1))
+            eddi_loss = ((mort_logit - target) ** 2).mean()
+            loss = loss_mort + loss_los + loss_mv + loss_gamma * eddi_loss
             running_loss += loss.item()
     return running_loss
 
 def evaluate_model_with_confusion(model, dataloader, device, threshold=0.5):
     model.eval()
-    all_mort_logits = []
-    all_los_logits = []
-    all_mech_logits = []
-    all_labels_mort = []
-    all_labels_los = []
-    all_labels_mech = []
-    all_age = []
-    all_ethnicity = []
-    all_insurance = []
+    all_mort_logits, all_los_logits, all_mv_logits = [], [], []
+    all_labels_mort, all_labels_los, all_labels_mv = [], [], []
+    all_age, all_ethnicity, all_insurance = [], [], []
     with torch.no_grad():
         for batch in dataloader:
             (demo_dummy_ids, demo_attn_mask,
@@ -359,39 +359,39 @@ def evaluate_model_with_confusion(model, dataloader, device, threshold=0.5):
              lab_features,
              aggregated_text_embedding,
              labels_mortality, labels_los, labels_mechvent) = [x.to(device) for x in batch]
-            mort_logits, los_logits, mech_logits, _ = model(
+            mort_logits, los_logits, mv_logits, _ = model(
                 demo_dummy_ids, demo_attn_mask,
                 age_ids, gender_ids, ethnicity_ids, insurance_ids,
                 lab_features, aggregated_text_embedding
             )
             all_mort_logits.append(mort_logits.cpu())
             all_los_logits.append(los_logits.cpu())
-            all_mech_logits.append(mech_logits.cpu())
+            all_mv_logits.append(mv_logits.cpu())
             all_labels_mort.append(labels_mortality.cpu())
             all_labels_los.append(labels_los.cpu())
-            all_labels_mech.append(labels_mechvent.cpu())
+            all_labels_mv.append(labels_mechvent.cpu())
             all_age.append(age_ids.cpu())
             all_ethnicity.append(ethnicity_ids.cpu())
             all_insurance.append(insurance_ids.cpu())
     
     all_mort_logits = torch.cat(all_mort_logits, dim=0)
     all_los_logits  = torch.cat(all_los_logits, dim=0)
-    all_mech_logits = torch.cat(all_mech_logits, dim=0)
+    all_mv_logits = torch.cat(all_mv_logits, dim=0)
     all_labels_mort = torch.cat(all_labels_mort, dim=0)
     all_labels_los  = torch.cat(all_labels_los, dim=0)
-    all_labels_mech = torch.cat(all_labels_mech, dim=0)
+    all_labels_mv = torch.cat(all_labels_mv, dim=0)
     
     mort_probs = torch.sigmoid(all_mort_logits).numpy().squeeze()
     los_probs  = torch.sigmoid(all_los_logits).numpy().squeeze()
-    mech_probs = torch.sigmoid(all_mech_logits).numpy().squeeze()
+    mv_probs   = torch.sigmoid(all_mv_logits).numpy().squeeze()
     labels_mort_np = all_labels_mort.numpy().squeeze()
-    labels_los_np  = all_labels_los.numpy().squeeze()
-    labels_mech_np = all_labels_mech.numpy().squeeze()
+    labels_los_np = all_labels_los.numpy().squeeze()
+    labels_mv_np = all_labels_mv.numpy().squeeze()
     
     metrics = {}
     for task, probs, labels in zip(["mortality", "los", "mechanical_ventilation"],
-                                     [mort_probs, los_probs, mech_probs],
-                                     [labels_mort_np, labels_los_np, labels_mech_np]):
+                                     [mort_probs, los_probs, mv_probs],
+                                     [labels_mort_np, labels_los_np, labels_mv_np]):
         try:
             aucroc = roc_auc_score(labels, probs)
         except Exception:
@@ -412,37 +412,32 @@ def evaluate_model_with_confusion(model, dataloader, device, threshold=0.5):
                          "recall": recall_val, "precision": precision_val,
                          "tpr": tpr, "fpr": fpr}
     
-    # Compute fairness EDDI for sensitive subgroups using the provided function.
-    ages = torch.cat(all_age, dim=0).numpy().squeeze()
-    ethnicities = torch.cat(all_ethnicity, dim=0).numpy().squeeze()
-    insurances = torch.cat(all_insurance, dim=0).numpy().squeeze()
+    # Compute fairness EDDI for sensitive subgroups (for mortality outcome, for example)
+    all_age = torch.cat(all_age, dim=0).numpy().squeeze()
+    all_ethnicity = torch.cat(all_ethnicity, dim=0).numpy().squeeze()
+    all_insurance = torch.cat(all_insurance, dim=0).numpy().squeeze()
+    age_groups = np.array([get_age_bucket(a) for a in all_age])
+    ethnicity_groups = np.array([map_ethnicity(e) for e in all_ethnicity])
+    insurance_groups = np.array([map_insurance(i) for i in all_insurance])
     
-    age_groups = np.array([get_age_bucket(a) for a in ages])
-    ethnicity_groups = np.array([map_ethnicity(e) for e in ethnicities])
-    insurance_groups = np.array([map_insurance(i) for i in insurances])
-    
-    eddi_stats = {}
-    for task, labels_np, probs in zip(["mortality", "los", "mechanical_ventilation"],
-                                      [labels_mort_np, labels_los_np, labels_mech_np],
-                                      [mort_probs, los_probs, mech_probs]):
-        overall_age, age_eddi_sub = compute_eddi(labels_np.astype(int), probs, age_groups, threshold)
-        overall_eth, eth_eddi_sub = compute_eddi(labels_np.astype(int), probs, ethnicity_groups, threshold)
-        overall_ins, ins_eddi_sub = compute_eddi(labels_np.astype(int), probs, insurance_groups, threshold)
-        total_eddi = np.sqrt((overall_age**2 + overall_eth**2 + overall_ins**2)) / 3
-        eddi_stats[task] = {"age_eddi": overall_age,
-                            "age_subgroup_eddi": age_eddi_sub,
-                            "ethnicity_eddi": overall_eth,
-                            "ethnicity_subgroup_eddi": eth_eddi_sub,
-                            "insurance_eddi": overall_ins,
-                            "insurance_subgroup_eddi": ins_eddi_sub,
-                            "final_EDDI": total_eddi}
-    
-    metrics["eddi_stats"] = eddi_stats
+    overall_age, age_eddi_sub = compute_eddi(labels_mort_np.astype(int), mort_probs, age_groups, threshold)
+    overall_eth, eth_eddi_sub = compute_eddi(labels_mort_np.astype(int), mort_probs, ethnicity_groups, threshold)
+    overall_ins, ins_eddi_sub = compute_eddi(labels_mort_np.astype(int), mort_probs, insurance_groups, threshold)
+    total_eddi = np.sqrt((overall_age**2 + overall_eth**2 + overall_ins**2)) / 3
+    eddi_stats = {"age_eddi": overall_age,
+                  "age_subgroup_eddi": age_eddi_sub,
+                  "ethnicity_eddi": overall_eth,
+                  "ethnicity_subgroup_eddi": eth_eddi_sub,
+                  "insurance_eddi": overall_ins,
+                  "insurance_subgroup_eddi": ins_eddi_sub,
+                  "final_EDDI": total_eddi}
+    metrics["eddi_stats"] = {"mortality": eddi_stats}
     return metrics
 
 def evaluate_model(model, dataloader, device, threshold=0.5):
     metrics = evaluate_model_with_confusion(model, dataloader, device, threshold)
     return metrics
+
 
 def train_pipeline():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -483,14 +478,14 @@ def train_pipeline():
     df_filtered = merged_df[merged_df.apply(has_valid_note, axis=1)].copy()
     print("After filtering, number of rows:", len(df_filtered))
 
-    # Multi-label stratification based on the three outcomes
+    # Multi-label stratification based on the three outcomes.
     labels = df_filtered[['short_term_mortality', 'los_binary', 'mechanical_ventilation']].values
     msss = MultilabelStratifiedShuffleSplit(n_splits=1, test_size=0.2, random_state=42)
     for train_val_idx, test_idx in msss.split(df_filtered, labels):
         train_val_df = df_filtered.iloc[train_val_idx]
         test_df = df_filtered.iloc[test_idx]
     
-    # Further stratify the train_val set into train and validation (5% for validation)
+    # Further stratify the train_val set into train and validation (5% for validation).
     labels_train_val = train_val_df[['short_term_mortality', 'los_binary', 'mechanical_ventilation']].values
     msss_val = MultilabelStratifiedShuffleSplit(n_splits=1, test_size=0.05, random_state=42)
     for train_idx, val_idx in msss_val.split(train_val_df, labels_train_val):
@@ -499,7 +494,7 @@ def train_pipeline():
     
     print(f"Train size: {len(train_df)}, Validation size: {len(val_df)}, Test size: {len(test_df)}")
 
-    # Compute Aggregated Text Embeddings for each split 
+    # Compute Aggregated Text Embeddings for each split.
     tokenizer = AutoTokenizer.from_pretrained("emilyalsentzer/Bio_ClinicalBERT")
     bioclinical_bert_base = BertModel.from_pretrained("emilyalsentzer/Bio_ClinicalBERT")
     bioclinical_bert_ft = BioClinicalBERT_FT(bioclinical_bert_base, bioclinical_bert_base.config, device).to(device)
@@ -511,7 +506,7 @@ def train_pipeline():
     print("Processing test text embeddings...")
     agg_text_test = apply_bioclinicalbert_on_patient_notes(test_df, note_columns, tokenizer, bioclinical_bert_ft, device, aggregation="mean")
 
-    # Process demographics and lab features for each split 
+    # Process demographics and lab features.
     demographics_cols = ["age", "GENDER", "ETHNICITY", "INSURANCE"]
     for col in demographics_cols:
         for df in [train_df, val_df, test_df]:
@@ -532,7 +527,7 @@ def train_pipeline():
     for df in [train_df, val_df, test_df]:
         df[lab_feature_columns] = df[lab_feature_columns].fillna(0)
 
-    # Compute normalization parameters from training data
+    # Compute normalization parameters from training data.
     lab_features_train = train_df[lab_feature_columns].values.astype(np.float32)
     lab_mean = np.mean(lab_features_train, axis=0)
     lab_std = np.std(lab_features_train, axis=0) + 1e-6
@@ -546,7 +541,7 @@ def train_pipeline():
     lab_val = process_lab_features(val_df)
     lab_test = process_lab_features(test_df)
 
-    # Create tensor datasets for each split
+    # Create tensor datasets.
     def create_dataset(df, agg_text_np, lab_features_np):
         num_samples = len(df)
         demo_dummy_ids = torch.zeros((num_samples, 1), dtype=torch.long)
@@ -574,8 +569,8 @@ def train_pipeline():
     test_dataset  = create_dataset(test_df, agg_text_test, lab_test)
 
     train_loader = DataLoader(train_dataset, batch_size=16, shuffle=True)
-    val_loader   = DataLoader(val_dataset, batch_size=16, shuffle=False)
-    test_loader  = DataLoader(test_dataset, batch_size=16, shuffle=False)
+    val_loader = DataLoader(val_dataset, batch_size=16, shuffle=False)
+    test_loader = DataLoader(test_dataset, batch_size=16, shuffle=False)
 
     NUM_AGES = train_df["age"].nunique()
     NUM_GENDERS = train_df["GENDER"].nunique()
@@ -613,26 +608,25 @@ def train_pipeline():
     optimizer = torch.optim.Adam(multimodal_model.parameters(), lr=1e-5)
     scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=2, verbose=True)
 
-    # Compute positive weights using the entire merged dataset (df_filtered)
+    # Compute positive weights.
     mortality_pos_weight = get_pos_weight(df_filtered["short_term_mortality"], device)
     los_pos_weight = get_pos_weight(df_filtered["los_binary"], device)
     mech_pos_weight = get_pos_weight(df_filtered["mechanical_ventilation"], device)
 
-    # Define separate FocalLoss criteria for each task with gamma set to 1
     global criterion_mortality, criterion_los, criterion_mech
     criterion_mortality = FocalLoss(gamma=1, pos_weight=mortality_pos_weight, reduction='mean')
     criterion_los = FocalLoss(gamma=1, pos_weight=los_pos_weight, reduction='mean')
     criterion_mech = FocalLoss(gamma=1, pos_weight=mech_pos_weight, reduction='mean')
 
     max_epochs = 20
-    patience_limit = 5  
-    beta_value = 0.3   
+    patience_limit = 5
+    beta_value = 0.3
     loss_gamma = 1.0
 
     best_val_loss = float('inf')
     epochs_no_improve = 0
 
-    # Training Loop with Early Stopping and detailed evaluation metrics printing per epoch
+    # Training Loop with Early Stopping.
     for epoch in range(max_epochs):
         train_loss = train_step(multimodal_model, train_loader, optimizer, device,
                                 beta=beta_value, loss_gamma=loss_gamma, target=1.0)
@@ -642,23 +636,20 @@ def train_pipeline():
                                  beta=beta_value, loss_gamma=loss_gamma, target=1.0)
         val_loss_epoch = val_loss / len(val_loader)
         
-        # Evaluate on validation set and get detailed metrics.
+        # Evaluate on validation set.
         val_metrics = evaluate_model_with_confusion(multimodal_model, val_loader, device, threshold=0.5)
         
         print(f"[Epoch {epoch+1}] Train Loss: {train_loss_epoch:.4f} | Val Loss: {val_loss_epoch:.4f}")
-        # Print metrics for each outcome.
         for outcome in ["mortality", "los", "mechanical_ventilation"]:
             m = val_metrics[outcome]
             print(f"  {outcome.capitalize()}: AUROC={m['aucroc']:.4f}, AUPRC={m['auprc']:.4f}, F1={m['f1']:.4f}, "
                   f"Recall={m['recall']:.4f}, Precision={m['precision']:.4f}, TPR={m['tpr']:.4f}, FPR={m['fpr']:.4f}")
-        # Print fairness EDDI for each outcome.
         for outcome in ["mortality", "los", "mechanical_ventilation"]:
             eddi = val_metrics["eddi_stats"][outcome]["final_EDDI"]
             print(f"  {outcome.capitalize()} Final EDDI: {eddi:.4f}")
         
         scheduler.step(val_loss_epoch)
         
-        # Early stopping check
         if val_loss_epoch < best_val_loss:
             best_val_loss = val_loss_epoch
             epochs_no_improve = 0
@@ -673,7 +664,6 @@ def train_pipeline():
 
     print("Training complete.\n")
     
-    # Load the best model and evaluate on the test set.
     multimodal_model.load_state_dict(torch.load("best_model.pth"))
     final_metrics = evaluate_model(multimodal_model, test_loader, device, threshold=0.5)
     
@@ -693,25 +683,23 @@ def train_pipeline():
         print("  Precision : {:.4f}".format(m["precision"]))
 
     print("\n--- Final Detailed EDDI Statistics ---")
-    for task in ["mortality", "los", "mechanical_ventilation"]:
-        print(f"\nTask: {task.capitalize()}")
-        eddi_stats = final_metrics["eddi_stats"][task]
-        print("  Aggregated Age EDDI    : {:.4f}".format(eddi_stats["age_eddi"]))
-        print("  Age Subgroup EDDI:")
-        for bucket in ["15-29", "30-49", "50-69", "70-89", "Other"]:
-            score = eddi_stats["age_subgroup_eddi"].get(bucket, 0)
-            print(f"    {bucket}: {score:.4f}")
-        print("  Aggregated Ethnicity EDDI: {:.4f}".format(eddi_stats["ethnicity_eddi"]))
-        print("  Ethnicity Subgroup EDDI:")
-        for group in ["white", "black", "asian", "hispanic", "other"]:
-            score = eddi_stats["ethnicity_subgroup_eddi"].get(group, 0)
-            print(f"    {group}: {score:.4f}")
-        print("  Aggregated Insurance EDDI: {:.4f}".format(eddi_stats["insurance_eddi"]))
-        print("  Insurance Subgroup EDDI:")
-        for group in ["government", "medicare", "Medicaid", "private", "self pay", "other"]:
-            score = eddi_stats["insurance_subgroup_eddi"].get(group, 0)
-            print(f"    {group}: {score:.4f}")
-        print("  Final Overall {} EDDI: {:.4f}".format(task.capitalize(), eddi_stats["final_EDDI"]))
+    eddi_stats = final_metrics["eddi_stats"]["mortality"]
+    print("  Aggregated Age EDDI    : {:.4f}".format(eddi_stats["age_eddi"]))
+    print("  Age Subgroup EDDI:")
+    for bucket in ["15-29", "30-49", "50-69", "70-89", "Other"]:
+        score = eddi_stats["age_subgroup_eddi"].get(bucket, 0)
+        print(f"    {bucket}: {score:.4f}")
+    print("  Aggregated Ethnicity EDDI: {:.4f}".format(eddi_stats["ethnicity_eddi"]))
+    print("  Ethnicity Subgroup EDDI:")
+    for group in ["white", "black", "asian", "hispanic", "other"]:
+        score = eddi_stats["ethnicity_subgroup_eddi"].get(group, 0)
+        print(f"    {group}: {score:.4f}")
+    print("  Aggregated Insurance EDDI: {:.4f}".format(eddi_stats["insurance_eddi"]))
+    print("  Insurance Subgroup EDDI:")
+    for group in ["government", "medicare", "Medicaid", "private", "self pay", "other"]:
+        score = eddi_stats["insurance_subgroup_eddi"].get(group, 0)
+        print(f"    {group}: {score:.4f}")
+    print("  Final Overall Mortality EDDI: {:.4f}".format(eddi_stats["final_EDDI"]))
     
     print("\nTesting complete.")
 
