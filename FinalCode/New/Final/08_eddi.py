@@ -310,8 +310,7 @@ class MultimodalTransformer(nn.Module):
             self.classifier_demo_mv, self.classifier_lab_mv, self.classifier_text_mv,
             beta
         )
-        # Optionally, if y_true and sensitive_labels are provided,
-        # you can compute per-modality fairness EDDI from the individual modality probabilities.
+        
         eddi_details = {"mortality": mort_details,
                         "los": los_details,
                         "mechanical_ventilation": mv_details}
