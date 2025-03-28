@@ -14,7 +14,7 @@ from torch.utils.data import TensorDataset, DataLoader
 
 from transformers import BertModel, BertConfig, AutoTokenizer
 from sklearn.metrics import roc_auc_score, average_precision_score, f1_score, recall_score, precision_score, confusion_matrix
-from iterstrat.ml_stratifiers import MultilabelStratifiedShuffleSplit  # Multi-label stratification
+from iterstrat.ml_stratifiers import MultilabelStratifiedShuffleSplit 
 
 DEBUG = True
 
@@ -137,7 +137,6 @@ def apply_bioclinicalbert_on_patient_notes(df, note_columns, tokenizer, model, d
             aggregated_embeddings.append(agg_emb)
     aggregated_embeddings = np.vstack(aggregated_embeddings)
     return aggregated_embeddings
-
 
 # BEHRT Models for Structured Data
 class BEHRTModel_Demo(nn.Module):
@@ -268,6 +267,7 @@ class MultimodalTransformer(nn.Module):
 
         eddi_max_val = max(eddi_demo_val, eddi_lab_val, eddi_text_val)
 
+        # Update weights using previous epoch's weight if available.
         if old_weights is not None:
             old_weight_demo, old_weight_lab, old_weight_text = old_weights
             weight_demo = old_weight_demo + beta * (eddi_max_val - eddi_demo_val)
@@ -565,14 +565,12 @@ def evaluate_model(model, dataloader, device, threshold=0.5, old_eddi_weights=No
     metrics = evaluate_model_with_confusion(model, dataloader, device, threshold, old_eddi_weights=old_eddi_weights)
     return metrics
 
-###############################
+
 # Training Pipeline
-###############################
 def train_pipeline():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("Using device:", device)
 
-    # Load structured and unstructured CSV data.
     structured_data = pd.read_csv("final_structured_common.csv")
     unstructured_data = pd.read_csv("final_unstructured_common.csv", low_memory=False)
     print("\n--- Debug Info: Before Merge ---")
