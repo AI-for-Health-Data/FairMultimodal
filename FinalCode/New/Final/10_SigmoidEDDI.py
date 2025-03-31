@@ -1,3 +1,10 @@
+import os
+import sys
+# Remove current directory from sys.path to avoid conflicts with local modules.
+current_dir = os.getcwd()
+if current_dir in sys.path:
+    sys.path.remove(current_dir)
+
 import time
 import random
 import argparse
@@ -22,7 +29,9 @@ import csv
 
 DEBUG = True
 
-
+# -----------------------------
+# Loss and Utility Functions
+# -----------------------------
 class FocalLoss(nn.Module):
     def __init__(self, gamma=2, alpha=None, reduction='mean', pos_weight=None):
         super(FocalLoss, self).__init__()
@@ -91,6 +100,9 @@ def compute_eddi(y_true, y_pred, sensitive_labels, threshold=0.5):
     eddi_attr = np.sqrt(np.sum(np.array(list(subgroup_eddi.values())) ** 2)) / len(unique_groups)
     return eddi_attr, subgroup_eddi
 
+# -----------------------------
+# Models and Fusion
+# -----------------------------
 class BioClinicalBERT_FT(nn.Module):
     def __init__(self, base_model, config, device):
         super(BioClinicalBERT_FT, self).__init__()
@@ -273,9 +285,11 @@ class MultimodalTransformer_EDDI_Sigmoid(nn.Module):
         # Apply shared sigmoid gating.
         sig_weights = torch.sigmoid(self.sig_weights)  # shape (768,)
         gated_vector = fused_vector * sig_weights  # element-wise modulation
+        print(gated_vector.shape)
         # Final fusion MLP.
         fused_logits = self.fusion_mlp(gated_vector)
         
+
         outputs = {
             "fused_logits": fused_logits,
             "dynamic_weights": {"demo": weight_demo, "lab": weight_lab, "text": weight_text},
@@ -291,7 +305,9 @@ class MultimodalTransformer_EDDI_Sigmoid(nn.Module):
 
         return outputs
 
-
+# -----------------------------
+# Weight Update and Training Steps
+# -----------------------------
 def update_dynamic_weights(model, dataloader, device, old_eddi_weights, beta, threshold=0.5):
     model.eval()
     all_demo_preds, all_lab_preds, all_text_preds, all_labels = [], [], [], []
@@ -392,7 +408,9 @@ def train_step(model, dataloader, optimizer, device, criterion, beta=1.0, lambda
         running_loss += loss.item()
     return running_loss
 
-
+# -----------------------------
+# Evaluation Functions (with Sensitive Data Return)
+# -----------------------------
 def calibrate_thresholds(model, dataloader, device):
     model.eval()
     all_logits = []
@@ -496,7 +514,9 @@ def evaluate_model(model, dataloader, device, threshold=0.5, old_eddi_weights=No
     metrics, logits_all, labels_all, age_all, ethnicity_all, insurance_all = evaluate_model_multi(model, dataloader, device, thresholds=threshold, print_eddi=True)
     return metrics, logits_all, labels_all, age_all, ethnicity_all, insurance_all
 
-
+# -----------------------------
+# Training Pipeline
+# -----------------------------
 def run_experiment(hparams):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("\nUsing device:", device)
@@ -586,16 +606,24 @@ def run_experiment(hparams):
     labels_np = df_filtered[["short_term_mortality", "los_binary", "mechanical_ventilation"]].values.astype(np.float32)
     labels = torch.tensor(labels_np, dtype=torch.float32)
 
-    df_filtered["label_combo"] = (df_filtered["short_term_mortality"].astype(str) + "_" +
-                                  df_filtered["los_binary"].astype(str) + "_" +
-                                  df_filtered["mechanical_ventilation"].astype(str))
-    stratify_col = df_filtered["label_combo"]
+    # Extract multilabel targets.
+    labels_multilabel = df_filtered[['short_term_mortality', 'los_binary', 'mechanical_ventilation']].values
 
-    indices = np.arange(num_samples)
-    train_idx, test_idx = train_test_split(indices, test_size=0.20, stratify=stratify_col, random_state=42)
-    stratify_train = stratify_col.iloc[train_idx]
-    train_idx, val_idx = train_test_split(train_idx, test_size=0.05, stratify=stratify_train, random_state=42)
+    # First split: train+validation vs. test (80/20 split).
+    msss = MultilabelStratifiedShuffleSplit(n_splits=1, test_size=0.20, random_state=42)
+    for train_val_idx, test_idx in msss.split(df_filtered, labels_multilabel):
+        train_val_df = df_filtered.iloc[train_val_idx]
+        test_df = df_filtered.iloc[test_idx]
 
+    # Second split: train vs. validation (e.g., 95/5 split on train+validation).
+    labels_train_val = train_val_df[['short_term_mortality', 'los_binary', 'mechanical_ventilation']].values
+    msss_val = MultilabelStratifiedShuffleSplit(n_splits=1, test_size=0.05, random_state=42)
+    for train_idx, val_idx in msss_val.split(train_val_df, labels_train_val):
+        train_df = train_val_df.iloc[train_idx]
+        val_df = train_val_df.iloc[val_idx]
+
+    print(f"Train size: {len(train_df)}, Validation size: {len(val_df)}, Test size: {len(test_df)}")
+    
     def create_dataset(indices):
         return TensorDataset(
             demo_dummy_ids[indices], demo_attn_mask[indices],
