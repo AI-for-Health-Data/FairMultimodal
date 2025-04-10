@@ -11,14 +11,145 @@ from torch.optim import Adam, AdamW
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.utils.data import TensorDataset, DataLoader, Subset
 from transformers import BertModel, BertConfig, AutoTokenizer
-from sklearn.metrics import accuracy_score, recall_score, precision_score, roc_auc_score, average_precision_score, f1_score, roc_curve
+from sklearn.metrics import (accuracy_score, recall_score, precision_score, roc_auc_score,
+                             average_precision_score, f1_score, roc_curve, confusion_matrix)
 from iterstrat.ml_stratifiers import MultilabelStratifiedShuffleSplit
 import pickle
 import math
 import matplotlib.pyplot as plt
+import os
 
 DEBUG = True
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+
+def calculate_fairness_metrics(labels, predictions, demographics, sensitive_class):
+    """
+    Calculate fairness metrics such as Equal Opportunity and Equal Odds for a given sensitive_class.
+    """
+    sensitive_indices = demographics == sensitive_class
+    non_sensitive_indices = ~sensitive_indices
+
+    tn_s, fp_s, fn_s, tp_s = confusion_matrix(labels[sensitive_indices], predictions[sensitive_indices]).ravel()
+    tn_ns, fp_ns, fn_ns, tp_ns = confusion_matrix(labels[non_sensitive_indices], predictions[non_sensitive_indices]).ravel()
+
+    tpr_s = tp_s / (tp_s + fn_s) if (tp_s + fn_s) != 0 else 0
+    fpr_s = fp_s / (fp_s + tn_s) if (fp_s + tn_s) != 0 else 0
+
+    tpr_ns = tp_ns / (tp_ns + fn_ns) if (tp_ns + fn_ns) != 0 else 0
+    fpr_ns = fp_ns / (fp_ns + tn_ns) if (fp_ns + tn_ns) != 0 else 0
+
+    eod = tpr_s - tpr_ns
+    eod_fpr = fpr_s - fpr_ns
+    eod_tpr = tpr_s - tpr_ns
+    avg_eod = (abs(eod_fpr) + abs(eod_tpr)) / 2
+
+    return {
+        "TPR Sensitive": tpr_s,
+        "TPR Non-Sensitive": tpr_ns,
+        "FPR Sensitive": fpr_s,
+        "FPR Non-Sensitive": fpr_ns,
+        "Equal Opportunity Difference": eod,
+        "Equalized Odds Difference (FPR)": eod_fpr,
+        "Equalized Odds Difference (TPR)": eod_tpr,
+        "Average Equalized Odds Difference": avg_eod
+    }
+
+def calculate_multiclass_fairness_metrics(labels, predictions, demographics):
+    """
+    Calculate fairness metrics for all classes in the sensitive attribute.
+    """
+    unique_classes = np.unique(demographics)
+    metrics = {}
+
+    for sensitive_class in unique_classes:
+        sensitive_indices = demographics == sensitive_class
+        non_sensitive_indices = ~sensitive_indices
+
+        tn_s, fp_s, fn_s, tp_s = confusion_matrix(labels[sensitive_indices], predictions[sensitive_indices]).ravel()
+        tn_ns, fp_ns, fn_ns, tp_ns = confusion_matrix(labels[non_sensitive_indices], predictions[non_sensitive_indices]).ravel()
+
+        tpr_s = tp_s / (tp_s + fn_s) if (tp_s + fn_s) != 0 else 0
+        fpr_s = fp_s / (fp_s + tn_s) if (fp_s + tn_s) != 0 else 0
+
+        tpr_ns = tp_ns / (tp_ns + fn_ns) if (tp_ns + fn_ns) != 0 else 0
+        eod = tpr_s - tpr_ns
+        avg_eod = (abs(fp_s / (fp_s + tn_s) - (fp_ns / (fp_ns + tn_ns))) + abs(eod)) / 2
+
+        metrics[sensitive_class] = {
+            "TPR": tpr_s,
+            "FPR": fpr_s,
+            "Equal Opportunity Difference": eod,
+            "Average Equalized Odds Difference": avg_eod
+        }
+
+    return metrics
+
+def calculate_predictive_parity(y_true, y_pred, sensitive_attrs):
+    """
+    Calculate the predictive parity (precision equality) for each group defined by a sensitive attribute.
+    """
+    unique_groups = np.unique(sensitive_attrs)
+    precision_scores = {}
+
+    for group in unique_groups:
+        group_indices = sensitive_attrs == group
+        precision = precision_score(y_true[group_indices], y_pred[group_indices], zero_division=0, average='weighted')
+        precision_scores[group] = precision
+
+    return precision_scores
+
+def calculate_tpr_and_fpr(y_true, y_pred, group_mask):
+    """
+    Calculate True Positive Rate (TPR) and False Positive Rate (FPR) for a given group.
+    """
+    cm = confusion_matrix(np.array(y_true)[group_mask], np.array(y_pred)[group_mask], labels=[1, 0])
+    tn, fp, fn, tp = cm.ravel()
+    tpr = tp / (tp + fn) if (tp + fn) > 0 else 0
+    fpr = fp / (fp + tn) if (fp + tn) > 0 else 0
+    return tpr, fpr
+
+def calculate_sd_for_rates(y_true, y_pred, sensitive_attr):
+    """
+    Calculate the standard deviation of TPR and FPR across all classes of a sensitive attribute.
+    """
+    unique_classes = np.unique(sensitive_attr)
+    tpr_values = []
+    fpr_values = []
+
+    for group in unique_classes:
+        group_mask = sensitive_attr == group
+        tpr, fpr = calculate_tpr_and_fpr(y_true, y_pred, group_mask)
+        tpr_values.append(tpr)
+        fpr_values.append(fpr)
+
+    sd_tpr = np.std(tpr_values, ddof=1)  # Sample standard deviation
+    sd_fpr = np.std(fpr_values, ddof=1)
+    
+    return sd_tpr, sd_fpr
+
+def calculate_equalized_odds_difference(y_true, y_pred, sensitive_attr):
+    """
+    Calculate the average absolute differences in TPR and FPR over all pairs of sensitive groups.
+    """
+    unique_classes = np.unique(sensitive_attr)
+    tpr_diffs = []
+    fpr_diffs = []
+
+    for i, group1 in enumerate(unique_classes):
+        for group2 in unique_classes[i+1:]:
+            group1_mask = sensitive_attr == group1
+            group2_mask = sensitive_attr == group2
+            tpr1, fpr1 = calculate_tpr_and_fpr(y_true, y_pred, group1_mask)
+            tpr2, fpr2 = calculate_tpr_and_fpr(y_true, y_pred, group2_mask)
+
+            tpr_diffs.append(abs(tpr1 - tpr2))
+            fpr_diffs.append(abs(fpr1 - fpr2))
+
+    avg_tpr_diff = np.mean(tpr_diffs)
+    avg_fpr_diff = np.mean(fpr_diffs)
+
+    return avg_tpr_diff, avg_fpr_diff
 
 class FocalLoss(nn.Module):
     def __init__(self, gamma=2, alpha=None, reduction='mean', pos_weight=None):
@@ -55,7 +186,6 @@ def get_pos_weight(labels_series, device, clip_max=10.0):
     if DEBUG:
         print("Positive weight:", weight.item())
     return weight
-
 
 def get_age_bucket(age):
     if 15 <= age <= 29:
@@ -94,7 +224,6 @@ def compute_eddi(y_true, y_pred, sensitive_labels, threshold=0.5):
 
     eddi_attr = np.sqrt(np.sum(np.array(list(subgroup_eddi.values())) ** 2)) / len(unique_groups)
     return eddi_attr, subgroup_eddi
-
 
 class BioClinicalBERT_FT(nn.Module):
     def __init__(self, base_model, config, device):
@@ -226,7 +355,6 @@ class MultimodalTransformer(nn.Module):
         los_logits = logits[:, 1].unsqueeze(1)
         vent_logits = logits[:, 2].unsqueeze(1)
         return mortality_logits, los_logits, vent_logits
-
 
 def train_step(model, dataloader, optimizer, device, crit_mort, crit_los, crit_vent):
     model.train()
@@ -413,9 +541,58 @@ def evaluate_model_metrics(model, dataloader, device, threshold=0.5, print_eddi=
                 score = eddi["insurance_subgroup_eddi"].get(group, 0)
                 print(f"    {group}: {score:.4f}")
             print("  Final Overall {} EDDI: {:.4f}".format(task.capitalize(), eddi["final_EDDI"]))
+
+    # Calculate subgroup TPR and FPR for each sensitive attribute (age, ethnicity, insurance)
+    sensitive_attrs = {
+        "age": np.array([get_age_bucket(a) for a in torch.cat(all_age, dim=0).numpy().squeeze()]),
+        "ethnicity": np.array([map_ethnicity(e) for e in torch.cat(all_ethnicity, dim=0).numpy().squeeze()]),
+        "insurance": np.array([map_insurance(i) for i in torch.cat(all_insurance, dim=0).numpy().squeeze()])
+    }
+    outcome_names = ["mortality", "los", "mechanical_ventilation"]
+    probs_list = [mort_probs, los_probs, mech_probs]
+    labels_list = [labels_mort_np, labels_los_np, labels_mech_np]
+    fairness_results = {}
+    for outcome, probs, labels in zip(outcome_names, probs_list, labels_list):
+        preds = (probs > threshold).astype(int)
+        fairness_results[outcome] = {}
+        for attr_name, attr_values in sensitive_attrs.items():
+            unique_groups = np.unique(attr_values)
+            fairness_results[outcome][attr_name] = {}
+            tpr_list = []
+            fpr_list = []
+            for group in unique_groups:
+                group_mask = attr_values == group
+                tpr, fpr = calculate_tpr_and_fpr(labels, preds, group_mask)
+                fairness_results[outcome][attr_name][group] = {"TPR": tpr, "FPR": fpr}
+                tpr_list.append(tpr)
+                fpr_list.append(fpr)
+            overall_tpr = np.mean(tpr_list)
+            overall_fpr = np.mean(fpr_list)
+            fairness_results[outcome][attr_name]["overall"] = {"average_TPR": overall_tpr, "average_FPR": overall_fpr}
+    print("\n--- Fairness Metrics (TPR & FPR) per Sensitive Attribute and Outcome ---")
+    for outcome in outcome_names:
+        print(f"\nOutcome: {outcome.capitalize()}")
+        for attr_name in sensitive_attrs.keys():
+            print(f" Sensitive attribute: {attr_name.capitalize()}")
+            for key, val in fairness_results[outcome][attr_name].items():
+                if key == "overall":
+                    print(f"   Overall - Average TPR: {val['average_TPR']:.3f}, Average FPR: {val['average_FPR']:.3f}")
+                else:
+                    print(f"   {key}: TPR: {val['TPR']:.3f}, FPR: {val['FPR']:.3f}")
+
+    # Calculate overall Equalized Odds Metrics for each sensitive attribute
+    print("\n--- Overall Equalized Odds Metrics for each Sensitive Attribute and Outcome ---")
+    for outcome, probs, labels in zip(outcome_names, probs_list, labels_list):
+        preds = (probs > threshold).astype(int)
+        print(f"\nOutcome: {outcome.capitalize()}")
+        for attr_name, attr_values in sensitive_attrs.items():
+            avg_tpr_diff, avg_fpr_diff = calculate_equalized_odds_difference(labels, preds, attr_values)
+            combined_metric = (avg_tpr_diff + avg_fpr_diff) / 2
+            print(f" {attr_name.capitalize()} - Average TPR Difference: {avg_tpr_diff:.3f}, Average FPR Difference: {avg_fpr_diff:.3f}, Combined Metric: {combined_metric:.3f}")
+    # ------------------ End New Fairness Metrics Section ------------------
+
     return metrics
 
-# Adv_Model Class (Adversarial Debiasing)
 import itertools
 
 hyperparameter_list = ['learning_rate', 'num_iters', 'num_nodes', 'num_nodes_adv', 'dropout_rate', 'alpha']
@@ -650,7 +827,6 @@ class Adv_Model(object):
                               zpred=zpred_valid.data.numpy() if zpred_valid is not None else None)
         return pd.DataFrame(metrics, index=[0])
 
-# get_metrics Function for Evaluation
 def get_metrics(ypred, y, z, hyperparameters, k=7, yselect=0, eval_file=None, zpred=None):
     metrics = dict()
     metrics['eval_file'] = eval_file
@@ -677,7 +853,6 @@ def get_metrics(ypred, y, z, hyperparameters, k=7, yselect=0, eval_file=None, zp
         metrics['roc_auc'] = float('nan')
     return metrics
 
-
 if __name__ == '__main__':
     structured_data = pd.read_csv('final_structured_common.csv')
     unstructured_data = pd.read_csv('final_unstructured_common.csv', low_memory=False)
@@ -701,7 +876,7 @@ if __name__ == '__main__':
         unstructured_data,
         on=["subject_id", "hadm_id"],
         how="inner"
-    )
+    ).head(1000)
     if merged_df.empty:
         raise ValueError("Merged DataFrame is empty. Check your data and merge keys.")
 
