@@ -1,9 +1,16 @@
 import os
 import sys
+# Remove current directory from sys.path to avoid conflicts with local modules.
+current_dir = os.getcwd()
+if current_dir in sys.path:
+    sys.path.remove(current_dir)
+
+import os
+import sys
 import time
 import random
 import argparse
-import datetime  
+import datetime  # <-- For timestamping
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
@@ -23,7 +30,6 @@ import json
 import csv
 
 DEBUG = True
-
 
 class FocalLoss(nn.Module):
     def __init__(self, gamma=2, alpha=None, reduction='mean', pos_weight=None):
@@ -52,66 +58,93 @@ def compute_class_weights(df, label_column):
     class_weights = total_samples / (class_counts * len(class_counts))
     return class_weights
 
-
 def compute_eddi(y_true, y_pred, sensitive_labels, threshold=0.5, complete_groups=None):
-    """
-    Computes overall and subgroup EDDI based on binary predictions.
-    Uses RMS (root mean square) of subgroup differences.
-    If complete_groups is provided (as a list or array of expected subgroup keys), ensures those keys appear.
-    """
-    # Binarize predictions
     y_pred_bin = (y_pred > threshold).astype(int)
     
-    # Use provided complete_groups, or determine unique groups from sensitive_labels
+    # Determine groups to check: either from complete_groups or the unique groups in the sensitive labels.
     groups = np.array(complete_groups) if complete_groups is not None else np.unique(sensitive_labels)
     
-    # Compute overall error rate
+    # Compute overall error rate of the entire dataset.
     overall_error = np.mean(y_pred_bin != y_true)
-    # Protect against degenerate case: if overall_error is exactly 0 or 1, use 1.0 as denominator
-    denom = max(overall_error, 1 - overall_error) if overall_error not in [0, 1] else 1.0
-
+    # Protect against degenerate cases: if overall_error is 0 or 1, we use 1.0 as the denominator.
+    denom = overall_error if overall_error not in [0, 1] else 1.0
+    if overall_error < 0.5:
+        denom = 1 - overall_error
+    else:
+        denom = overall_error
+    
     subgroup_eddi = {}
+    valid_groups_count = 0  # Count of groups with at least one sample.
+    
+    # Compute the EDDI for each subgroup that has samples.
     for group in groups:
         mask = (sensitive_labels == group)
         if np.sum(mask) == 0:
-            subgroup_eddi[group] = 0.0
-        else:
-            er_group = np.mean(y_pred_bin[mask] != y_true[mask])
-            subgroup_eddi[group] = (er_group - overall_error) / denom
+            continue
+        valid_groups_count += 1
+        er_group = np.mean(y_pred_bin[mask] != y_true[mask])
+        subgroup_eddi[group] = (er_group - overall_error) / denom
 
-    # Aggregate the subgroup differences using the RMS over the number of groups
-    eddi_attr = np.sqrt(np.sum(np.array(list(subgroup_eddi.values())) ** 2)) / len(groups)
-    return eddi_attr, subgroup_eddi
-
-
-def compute_eo_metric(labels, preds, sensitive_values):
-    groups = np.unique(sensitive_values)
-    tpr_dict = {}
-    fpr_dict = {}
-    for group in groups:
-        mask = (sensitive_values == group)
-        true_vals = labels[mask]
-        pred_vals = preds[mask]
-        TP = np.sum((true_vals == 1) & (pred_vals == 1))
-        FN = np.sum((true_vals == 1) & (pred_vals == 0))
-        FP = np.sum((true_vals == 0) & (pred_vals == 1))
-        TN = np.sum((true_vals == 0) & (pred_vals == 0))
-        tpr_dict[group] = TP / (TP + FN) if (TP + FN) > 0 else 0.0
-        fpr_dict[group] = FP / (FP + TN) if (FP + TN) > 0 else 0.0
-    group_list = list(groups)
-    n = len(group_list)
-    if n < 2:
-        avg_tpr_diff = avg_fpr_diff = 0
+    # Compute RMS over subgroups with samples.
+    if valid_groups_count > 0:
+        overall_eddi = np.sqrt(np.sum(np.array(list(subgroup_eddi.values())) ** 2)) / valid_groups_count
     else:
-        tpr_diffs = []
-        fpr_diffs = []
-        for i in range(n):
-            for j in range(i+1, n):
-                tpr_diffs.append(abs(tpr_dict[group_list[i]] - tpr_dict[group_list[j]]))
-                fpr_diffs.append(abs(fpr_dict[group_list[i]] - fpr_dict[group_list[j]]))
-        avg_tpr_diff = np.mean(tpr_diffs)
-        avg_fpr_diff = np.mean(fpr_diffs)
-    return (avg_tpr_diff + avg_fpr_diff) / 2.0, tpr_dict, fpr_dict
+        overall_eddi = 0.0
+
+    return overall_eddi, subgroup_eddi
+
+# Additional Fairness Metric Functions
+def calculate_tpr_and_fpr(y_true, y_pred, group_mask):
+    """
+    Calculate True Positive Rate (TPR) and False Positive Rate (FPR) for a given group.
+    """
+    cm = confusion_matrix(y_true[group_mask], y_pred[group_mask], labels=[1, 0])
+    if np.prod(cm.shape) != 4:
+        TP = np.sum((y_true[group_mask] == 1) & (y_pred[group_mask] == 1))
+        FN = np.sum((y_true[group_mask] == 1) & (y_pred[group_mask] == 0))
+        FP = np.sum((y_true[group_mask] == 0) & (y_pred[group_mask] == 1))
+        TN = np.sum((y_true[group_mask] == 0) & (y_pred[group_mask] == 0))
+    else:
+        tp, fn, fp, tn = cm.ravel()
+        TP, FN, FP, TN = tp, fn, fp, tn
+
+    tpr = TP / (TP + FN) if (TP + FN) > 0 else 0
+    fpr = FP / (FP + TN) if (FP + TN) > 0 else 0
+    return tpr, fpr
+
+def print_fairness_metrics(y_true, y_pred, demographics, sensitive_attr_name):
+
+    unique_groups = np.unique(demographics)
+    tpr_list = []
+    fpr_list = []
+    print(f"Fairness metrics for sensitive attribute: {sensitive_attr_name}")
+    for group in unique_groups:
+        group_mask = demographics == group
+        tpr, fpr = calculate_tpr_and_fpr(y_true, y_pred, group_mask)
+        print(f"  Group {group}: TPR = {tpr:.3f}, FPR = {fpr:.3f}")
+        tpr_list.append(tpr)
+        fpr_list.append(fpr)
+    # Calculate absolute pairwise differences.
+    tpr_diffs = []
+    fpr_diffs = []
+    for i, tpr_i in enumerate(tpr_list):
+        for j in range(i+1, len(tpr_list)):
+            tpr_diffs.append(abs(tpr_i - tpr_list[j]))
+            fpr_diffs.append(abs(fpr_list[i] - fpr_list[j]))
+    avg_tpr_diff = np.mean(tpr_diffs) if tpr_diffs else 0.0
+    avg_fpr_diff = np.mean(fpr_diffs) if fpr_diffs else 0.0
+    print(f"  Average TPR difference across groups: {avg_tpr_diff:.3f}")
+    print(f"  Average FPR difference across groups: {avg_fpr_diff:.3f}\n")
+    return avg_tpr_diff, avg_fpr_diff
+
+def calculate_predictive_parity(y_true, y_pred, sensitive_attrs):
+    unique_groups = np.unique(sensitive_attrs)
+    precision_scores = {}
+    for group in unique_groups:
+        group_indices = sensitive_attrs == group
+        precision = precision_score(y_true[group_indices], y_pred[group_indices], zero_division=0, average='weighted')
+        precision_scores[group] = precision
+    return precision_scores
 
 
 class BioClinicalBERT_FT(nn.Module):
@@ -152,7 +185,7 @@ def apply_bioclinicalbert_on_patient_notes(df, note_columns, tokenizer, model, d
                     emb = model(input_ids, attn_mask)
                 embeddings.append(emb.cpu().numpy())
             embeddings = np.vstack(embeddings)
-            agg_emb = np.mean(embeddings, axis=0) if aggregation=="mean" else np.max(embeddings, axis=0)
+            agg_emb = np.mean(embeddings, axis=0) if aggregation == "mean" else np.max(embeddings, axis=0)
             aggregated_embeddings.append(agg_emb)
     return np.vstack(aggregated_embeddings)
 
@@ -302,7 +335,6 @@ class MultimodalTransformer_EDDI_Sigmoid(nn.Module):
             outputs["fusion_pre_relu"] = fusion_pre_relu
         return outputs
 
-
 def update_dynamic_weights_all_tasks(model, dataloader, device, old_eddi_weights, beta, threshold=0.5):
     """
     Compute outcome-specific RMS-based EDDI (using the demo modality predictions)
@@ -318,14 +350,14 @@ def update_dynamic_weights_all_tasks(model, dataloader, device, old_eddi_weights
     The weight updates are clipped to a maximum magnitude (update_limit) and finally normalized
     so that the weights sum to 1.
     
-    Expected subgroup keys (as numeric codes) are passed via complete_groups.
+    Expected subgroup codes are passed via complete_groups.
     """
     outcome_names = ["mortality", "los", "mechanical_ventilation"]
     predictions = {outcome: {"demo": [], "lab": [], "text": []} for outcome in outcome_names}
     labels_all = {outcome: [] for outcome in outcome_names}
     sensitive_attrs = {"age": [], "ethnicity": [], "insurance": []}
 
-    # Collect predictions, labels and sensitive attributes from each batch.
+    # Collect predictions, labels, and sensitive attributes from each batch.
     with torch.no_grad():
         for batch in dataloader:
             (demo_dummy_ids, demo_attn_mask,
@@ -338,7 +370,6 @@ def update_dynamic_weights_all_tasks(model, dataloader, device, old_eddi_weights
                 beta=model.beta, old_eddi_weights=old_eddi_weights, return_modality_logits=True
             )
             modality_logits = outputs["modality_logits"]
-            # For each outcome index, collect predictions.
             for outcome_idx, outcome in enumerate(outcome_names):
                 demo_pred = (torch.sigmoid(modality_logits["demo"])[:, outcome_idx] > threshold).float().cpu().numpy()
                 lab_pred = (torch.sigmoid(modality_logits["lab"])[:, outcome_idx] > threshold).float().cpu().numpy()
@@ -347,12 +378,10 @@ def update_dynamic_weights_all_tasks(model, dataloader, device, old_eddi_weights
                 predictions[outcome]["lab"].append(lab_pred)
                 predictions[outcome]["text"].append(text_pred)
                 labels_all[outcome].append(labels[:, outcome_idx].cpu().numpy())
-            # Collect sensitive attributes.
             sensitive_attrs["age"].append(age_ids.cpu().numpy())
             sensitive_attrs["ethnicity"].append(ethnicity_ids.cpu().numpy())
             sensitive_attrs["insurance"].append(insurance_ids.cpu().numpy())
     
-    # Concatenate arrays.
     for outcome in outcome_names:
         for modality in ["demo", "lab", "text"]:
             predictions[outcome][modality] = np.concatenate(predictions[outcome][modality])
@@ -360,38 +389,22 @@ def update_dynamic_weights_all_tasks(model, dataloader, device, old_eddi_weights
     for key in sensitive_attrs:
         sensitive_attrs[key] = np.concatenate(sensitive_attrs[key])
     
-    # Define the expected subgroup codes.
     expected_age_codes = np.array([0, 1, 2, 3])
     expected_ethnicity_codes = np.array([0, 1, 2, 3, 4])
     expected_insurance_codes = np.array([0, 1, 2, 3, 4, 5])
     
     new_weights = {}
     for outcome in outcome_names:
-        # For a given modality's predictions, compute the overall EDDI using an RMS-based aggregation.
-        
         def modality_overall_eddi(mod_preds):
-            eddi_age, subgroup_age = compute_eddi(
-                labels_all[outcome], mod_preds, sensitive_attrs["age"],
-                threshold=threshold, complete_groups=expected_age_codes
-            )
-            eddi_ethnicity, subgroup_ethnicity = compute_eddi(
-                labels_all[outcome], mod_preds, sensitive_attrs["ethnicity"],
-                threshold=threshold, complete_groups=expected_ethnicity_codes
-            )
-            eddi_insurance, subgroup_insurance = compute_eddi(
-                labels_all[outcome], mod_preds, sensitive_attrs["insurance"],
-                threshold=threshold, complete_groups=expected_insurance_codes
-            )
-            
-            # Use RMS: overall_val = sqrt( mean( squared values ) )
+            eddi_age, _ = compute_eddi(labels_all[outcome], mod_preds, sensitive_attrs["age"], threshold=threshold, complete_groups=expected_age_codes)
+            eddi_ethnicity, _ = compute_eddi(labels_all[outcome], mod_preds, sensitive_attrs["ethnicity"], threshold=threshold, complete_groups=expected_ethnicity_codes)
+            eddi_insurance, _ = compute_eddi(labels_all[outcome], mod_preds, sensitive_attrs["insurance"], threshold=threshold, complete_groups=expected_insurance_codes)
             overall_val = np.sqrt(eddi_age**2 + eddi_ethnicity**2 + eddi_insurance**2) / 3.0
             return overall_val
         
-        # Compute overall EDDI for each modality for this outcome
         eddi_demo = modality_overall_eddi(predictions[outcome]["demo"])
         eddi_lab  = modality_overall_eddi(predictions[outcome]["lab"])
         eddi_text = modality_overall_eddi(predictions[outcome]["text"])
-        # Determine maximum EDDI over the modalities for this outcome
         eddi_max = max(eddi_demo, eddi_lab, eddi_text)
         
         print(f"[{outcome} Weight Update] EDDI:")
@@ -400,33 +413,26 @@ def update_dynamic_weights_all_tasks(model, dataloader, device, old_eddi_weights
         print("  Text modality - Overall EDDI: {:.4f}".format(eddi_text))
         print("  Maximum EDDI among modalities: {:.4f}".format(eddi_max))
         
-        # Retrieve previous weights, with a default if none are provided
         prev = old_eddi_weights.get(outcome, {"demo": 0.33, "lab": 0.33, "text": 0.33})
-        
-        # Update each modality's weight in proportion to how much lower its EDDI is than the max
         raw_update_demo = beta * (eddi_max - eddi_demo)
         raw_update_lab  = beta * (eddi_max - eddi_lab)
         raw_update_text = beta * (eddi_max - eddi_text)
         
-        # Limit the change per update
         update_limit = 0.05
         update_demo = np.clip(raw_update_demo, -update_limit, update_limit)
         update_lab  = np.clip(raw_update_lab, -update_limit, update_limit)
         update_text = np.clip(raw_update_text, -update_limit, update_limit)
         
-        # Ensure a minimum weight (e.g., 0.1) to prevent any modality from disappearing entirely
         new_demo = max(prev["demo"] + update_demo, 0.1)
         new_lab  = max(prev["lab"] + update_lab, 0.1)
         new_text = max(prev["text"] + update_text, 0.1)
         total = new_demo + new_lab + new_text
         
-        # Normalize so that weights sum to 1
         new_weights[outcome] = {
             "demo": new_demo / total,
             "lab": new_lab / total,
             "text": new_text / total
         }
-        
         print(f"[{outcome} Weight Update] New dynamic weights: {new_weights[outcome]}\n")
     
     return new_weights
@@ -515,6 +521,11 @@ def calibrate_thresholds(model, dataloader, device):
     return thresholds
 
 def evaluate_model_multi(model, dataloader, device, thresholds, print_eddi=False):
+    """
+    Evaluate the model on multiple outcomes and compute fairness metrics.
+    For each outcome, subgroup fairness metrics (TPR, FPR) are computed per sensitive attribute
+    (age, ethnicity, insurance), then the average differences are recorded.
+    """
     model.eval()
     all_logits = []
     all_labels = []
@@ -543,6 +554,7 @@ def evaluate_model_multi(model, dataloader, device, thresholds, print_eddi=False
 
     outcome_names = ["mortality", "los", "mechanical_ventilation"]
     metrics = {}
+    fairness_details = {}
     for i, outcome in enumerate(outcome_names):
         thresh = thresholds[outcome] if isinstance(thresholds, dict) else thresholds
         probs = torch.sigmoid(all_logits[:, i]).numpy().squeeze()
@@ -570,6 +582,13 @@ def evaluate_model_multi(model, dataloader, device, thresholds, print_eddi=False
                             "recall (TPR)": recall_val, "TPR": tpr,
                             "precision": precision_val, "fpr": fpr,
                             "optimal_threshold": thresh}
+        fairness_details[outcome] = {}
+        print(f"\nOutcome: {outcome} (Threshold: {thresh:.2f})")
+        for attr_name, dem_values in zip(["age", "ethnicity", "insurance"],
+                                         [all_age, all_ethnicity, all_insurance]):
+            print_fairness_metrics(labels_np, preds, dem_values, sensitive_attr_name=attr_name)
+            avg_tpr_diff, avg_fpr_diff = print_fairness_metrics(labels_np, preds, dem_values, sensitive_attr_name=attr_name)
+            fairness_details[outcome][attr_name] = {"avg_tpr_diff": avg_tpr_diff, "avg_fpr_diff": avg_fpr_diff}
     return metrics, all_logits.numpy(), all_labels.numpy(), all_age, all_ethnicity, all_insurance
 
 def evaluate_model(model, dataloader, device, threshold=0.5, old_eddi_weights=None):
@@ -578,16 +597,10 @@ def evaluate_model(model, dataloader, device, threshold=0.5, old_eddi_weights=No
     return metrics, logits_all, labels_all, age_all, ethnicity_all, insurance_all
 
 
-def extract_and_save_vectors(model, dataloader, device, save_path="extracted_vectors.npz"):
+def extract_and_save_vectors(model, dataloader, device, save_path="extracted_vectors1.npz"):
     """
-    Extracts the gated vector and the fusion pre-ReLU vector from the model for all batches,
-    along with ground truth labels and sensitive attribute arrays. Saves everything in one .npz file.
-    
-    Parameters:
-      model (nn.Module): The trained model.
-      dataloader (DataLoader): DataLoader from which to extract the data.
-      device (torch.device): The device (cpu or cuda).
-      save_path (str): The path for the output .npz file.
+    Extracts the gated vector and the fusion pre-ReLU vector for all batches,
+    along with ground truth labels and sensitive attribute arrays, and saves them to a file.
     """
     model.eval()
     all_gated = []
@@ -596,7 +609,6 @@ def extract_and_save_vectors(model, dataloader, device, save_path="extracted_vec
     all_age = []
     all_ethnicity = []
     all_insurance = []
-    
     with torch.no_grad():
         for batch in dataloader:
             (demo_dummy_ids, demo_attn_mask,
@@ -830,7 +842,7 @@ def run_experiment(hparams):
     tracked_dynamic_weights = {outcome: [] for outcome in ["mortality", "los", "mechanical_ventilation"]}
     tracked_sigmoid_weights = []
     
-    dynamic_weights_csv = "dynamic_weights_per_epoch.csv"
+    dynamic_weights_csv = "dynamic_weights_per_epoch1.csv"
     with open(dynamic_weights_csv, mode="w", newline="") as f:
         writer = csv.writer(f)
         writer.writerow(["Epoch", "Outcome", "demo_weight", "lab_weight", "text_weight"])
@@ -895,7 +907,6 @@ def run_experiment(hparams):
         best_model_filename = f"best_model_{timestamp}.pt"
         torch.save(best_model_state, best_model_filename)
         print("Saved best model to", best_model_filename)
-        # --- Extract and Save Vectors (with metadata) ---
         extracted_save_path = f"extracted_vectors_{timestamp}.npz"
         extract_and_save_vectors(multimodal_model, test_loader, device, save_path=extracted_save_path)
         
@@ -928,12 +939,10 @@ def run_experiment(hparams):
         true_vals = labels_all[:, i]
         thresh = val_thresholds[outcome]
         print(f"\nOutcome: {outcome} (Threshold: {thresh:.2f})")
-
         eddi_age, subgroup_age = compute_eddi(true_vals, probs, np.array(age_all), threshold=thresh, complete_groups=expected_age_codes)
         eddi_ethnicity, subgroup_ethnicity = compute_eddi(true_vals, probs, np.array(ethnicity_all), threshold=thresh, complete_groups=expected_ethnicity_codes)
         eddi_insurance, subgroup_insurance = compute_eddi(true_vals, probs, np.array(insurance_all), threshold=thresh, complete_groups=expected_insurance_codes)
         overall_combined = np.sqrt(eddi_age**2 + eddi_ethnicity**2 + eddi_insurance**2) / 3.0
-        
         combined_eddi[outcome] = overall_combined
         print(" Age EDDI:")
         print("  Overall:", eddi_age)
@@ -949,12 +958,12 @@ def run_experiment(hparams):
     print("\n--- Overall Combined EDDI across outcomes ---")
     print("Overall Combined EDDI:", overall_combined_eddi)
     
-    np.save("tracked_dynamic_weights_0.8.npy", tracked_dynamic_weights)
-    np.save("tracked_sigmoid_weights_0.8.npy", np.array(tracked_sigmoid_weights))
+    np.save("tracked_dynamic_weights_1.0.npy", tracked_dynamic_weights)
+    np.save("tracked_sigmoid_weights_1.0.npy", np.array(tracked_sigmoid_weights))
     
 if __name__ == "__main__":
     hyperparameter_grid = [
-        {'lr': 1e-5, 'num_epochs': 50, 'lambda_edd': 0.8, 'lambda_l1': 0.01,
+        {'lr': 1e-5, 'num_epochs': 50, 'lambda_edd': 1.0, 'lambda_l1': 0.01,
          'batch_size': 16, 'threshold': 0.50, 'weight_decay': 0.01, 'beta': 1.0},
     ]
     results = {}
