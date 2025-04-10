@@ -11,7 +11,7 @@ from torch.optim import AdamW
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.utils.data import TensorDataset, DataLoader, Subset, Dataset
 from transformers import BertModel, BertConfig, AutoTokenizer, AutoModel, RobertaModel
-from sklearn.metrics import roc_auc_score, average_precision_score, f1_score, recall_score, precision_score
+from sklearn.metrics import confusion_matrix, roc_auc_score, average_precision_score, f1_score, recall_score, precision_score
 from iterstrat.ml_stratifiers import MultilabelStratifiedShuffleSplit
 
 DEBUG = True
@@ -78,7 +78,6 @@ def map_insurance(code):
     mapping = {0: "government", 1: "medicare", 2: "medicaid", 3: "private", 4: "self pay"}
     return mapping.get(code, "other")
 
-
 def compute_eddi(y_true, y_pred, sensitive_labels, threshold=0.5):
     y_pred_binary = (np.array(y_pred) > threshold).astype(int)
     overall_error = np.mean(y_pred_binary != y_true)
@@ -103,7 +102,131 @@ def print_subgroup_eddi(true, pred, sensitive_name, sensitive_values, outcome_na
         print(f"  {group}: d(s) = {d:.4f}")
     return subgroup_disparities, overall_eddi
 
-# Synthetic Data Generation Functions
+def calculate_fairness_metrics(labels, predictions, demographics, sensitive_class):
+    """
+    Calculate fairness metrics such as Equal Opportunity and Equal Odds.
+    """
+    sensitive_indices = demographics == sensitive_class
+    non_sensitive_indices = ~sensitive_indices
+
+    tn_s, fp_s, fn_s, tp_s = confusion_matrix(labels[sensitive_indices], predictions[sensitive_indices]).ravel()
+    tn_ns, fp_ns, fn_ns, tp_ns = confusion_matrix(labels[non_sensitive_indices], predictions[non_sensitive_indices]).ravel()
+
+    tpr_s = tp_s / (tp_s + fn_s) if (tp_s + fn_s) != 0 else 0
+    fpr_s = fp_s / (fp_s + tn_s) if (fp_s + tn_s) != 0 else 0
+
+    tpr_ns = tp_ns / (tp_ns + fn_ns) if (tp_ns + fn_ns) != 0 else 0
+    fpr_ns = fp_ns / (fp_ns + tn_ns) if (fp_ns + tn_ns) != 0 else 0
+
+    eod = tpr_s - tpr_ns
+    eod_fpr = fpr_s - fpr_ns
+    eod_tpr = tpr_s - tpr_ns
+    avg_eod = (abs(eod_fpr) + abs(eod_tpr)) / 2
+
+    return {
+        "TPR Sensitive": tpr_s,
+        "TPR Non-Sensitive": tpr_ns,
+        "FPR Sensitive": fpr_s,
+        "FPR Non-Sensitive": fpr_ns,
+        "Equal Opportunity Difference": eod,
+        "Equalized Odds Difference (FPR)": eod_fpr,
+        "Equalized Odds Difference (TPR)": eod_tpr,
+        "Average Equalized Odds Difference": avg_eod
+    }
+
+def calculate_multiclass_fairness_metrics(labels, predictions, demographics):
+    unique_classes = np.unique(demographics)
+    metrics = {}
+    for sensitive_class in unique_classes:
+        sensitive_indices = demographics == sensitive_class
+        non_sensitive_indices = ~sensitive_indices
+
+        tn_s, fp_s, fn_s, tp_s = confusion_matrix(labels[sensitive_indices], predictions[sensitive_indices]).ravel()
+        tn_ns, fp_ns, fn_ns, tp_ns = confusion_matrix(labels[non_sensitive_indices], predictions[non_sensitive_indices]).ravel()
+
+        tpr_s = tp_s / (tp_s + fn_s) if (tp_s + fn_s) != 0 else 0
+        fpr_s = fp_s / (fp_s + tn_s) if (fp_s + tn_s) != 0 else 0
+
+        eod = tpr_s - (tp_ns / (tp_ns + fn_ns) if (tp_ns + fn_ns) != 0 else 0)
+        avg_eod = (abs(fp_s / (fp_s + tn_s) - (fp_ns / (fp_ns + tn_ns))) + abs(eod)) / 2
+
+        metrics[sensitive_class] = {
+            "TPR": tpr_s,
+            "FPR": fpr_s,
+            "Equal Opportunity Difference": eod,
+            "Average Equalized Odds Difference": avg_eod
+        }
+    return metrics
+
+def calculate_predictive_parity(y_true, y_pred, sensitive_attrs):
+    unique_groups = np.unique(sensitive_attrs)
+    precision_scores = {}
+    for group in unique_groups:
+        group_indices = sensitive_attrs == group
+        precision = precision_score(y_true[group_indices], y_pred[group_indices], zero_division=0, average='weighted')
+        precision_scores[group] = precision
+    return precision_scores
+
+def calculate_tpr_and_fpr(y_true, y_pred, group_mask):
+    """
+    Calculate TPR and FPR for a given group.
+    """
+    cm = confusion_matrix(y_true[group_mask], y_pred[group_mask], labels=[1, 0])
+    tn, fp, fn, tp = cm.ravel()
+    tpr = tp / (tp + fn) if (tp + fn) > 0 else 0
+    fpr = fp / (fp + tn) if (fp + tn) > 0 else 0
+    return tpr, fpr
+
+def calculate_sd_for_rates(y_true, y_pred, sensitive_attr):
+    unique_classes = np.unique(sensitive_attr)
+    tpr_values = []
+    fpr_values = []
+    for group in unique_classes:
+        group_mask = sensitive_attr == group
+        tpr, fpr = calculate_tpr_and_fpr(y_true, y_pred, group_mask)
+        tpr_values.append(tpr)
+        fpr_values.append(fpr)
+    sd_tpr = np.std(tpr_values, ddof=1)
+    sd_fpr = np.std(fpr_values, ddof=1)
+    return sd_tpr, sd_fpr
+
+def calculate_equalized_odds_difference(y_true, y_pred, sensitive_attr):
+    unique_classes = np.unique(sensitive_attr)
+    tpr_diffs = []
+    fpr_diffs = []
+    for i, group1 in enumerate(unique_classes):
+        for group2 in unique_classes[i+1:]:
+            group1_mask = sensitive_attr == group1
+            group2_mask = sensitive_attr == group2
+            tpr1, fpr1 = calculate_tpr_and_fpr(y_true, y_pred, group1_mask)
+            tpr2, fpr2 = calculate_tpr_and_fpr(y_true, y_pred, group2_mask)
+            tpr_diffs.append(abs(tpr1 - tpr2))
+            fpr_diffs.append(abs(fpr1 - fpr2))
+    avg_tpr_diff = np.mean(tpr_diffs)
+    avg_fpr_diff = np.mean(fpr_diffs)
+    return avg_tpr_diff, avg_fpr_diff
+
+def print_sensitive_tpr_fpr(y_true, y_pred, sensitive_attr, attr_name, outcome_name, threshold=0.5):
+    """
+    For a given outcome and sensitive attribute, threshold the predictions, then compute and print the TPR and FPR per subgroup.
+    Also computes the overall (average) TPR and FPR across subgroups.
+    """
+    binary_pred = (y_pred > threshold).astype(int)
+    unique_groups = np.unique(sensitive_attr)
+    print(f"\nTPR and FPR for {outcome_name} by {attr_name}:")
+    tpr_values = []
+    fpr_values = []
+    for group in unique_groups:
+        group_mask = sensitive_attr == group
+        tpr, fpr = calculate_tpr_and_fpr(y_true, binary_pred, group_mask)
+        print(f"  Group: {group}: TPR: {tpr:.3f}, FPR: {fpr:.3f}")
+        tpr_values.append(tpr)
+        fpr_values.append(fpr)
+    overall_tpr = np.mean(tpr_values)
+    overall_fpr = np.mean(fpr_values)
+    print(f"Overall {attr_name} -> {outcome_name}: Average TPR: {overall_tpr:.3f}, Average FPR: {overall_fpr:.3f}")
+    return tpr_values, fpr_values, overall_tpr, overall_fpr
+
 def generate_synthetic_notes(note):
     if isinstance(note, str) and note.strip():
         return note + " [SYN]"
@@ -117,7 +240,6 @@ def generate_synthetic_demographics(demo_tensor):
 def generate_synthetic_longitudinal(long_tensor):
     noise = torch.randn_like(long_tensor) * 0.01
     return long_tensor + noise
-
 
 class BioClinicalBERT_FT(nn.Module):
     def __init__(self, base_model, config, device):
@@ -373,7 +495,6 @@ def contrastive_loss(e_real, e_syn, tau=0.5, gamma=0.1):
     reg = torch.mean((e_syn - mean_syn).pow(2))
     return loss + gamma * reg
 
-# Evaluation Functions
 def evaluate_model_metrics(model, dataloader, device, threshold=0.5, print_eddi=False):
     model.eval()
     all_mort_logits = []
@@ -382,7 +503,7 @@ def evaluate_model_metrics(model, dataloader, device, threshold=0.5, print_eddi=
     all_labels_mort = []
     all_labels_los = []
     all_labels_vent = []
-    all_sensitive = []  # using age as sensitive attribute
+    all_sensitive = []  # using age as sensitive attribute for EDDI
     with torch.no_grad():
         for batch in dataloader:
             (dummy_input_ids, dummy_attn_mask,
@@ -482,7 +603,6 @@ def evaluate_model_loss(model, dataloader, device, crit_mort, crit_los, crit_ven
             running_loss += loss.item()
     return running_loss / len(dataloader)
 
-
 def get_test_predictions(model, dataloader, device):
     all_true = []
     all_pred = {'mortality': [], 'los': [], 'mech': []}
@@ -511,7 +631,6 @@ def get_test_predictions(model, dataloader, device):
     all_pred['mech'] = np.vstack(all_pred['mech']).squeeze()
     return all_true, all_pred
 
-
 def train_pipeline():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("Using device:", device)
@@ -535,7 +654,7 @@ def train_pipeline():
         unstructured_data,
         on=["subject_id", "hadm_id"],
         how="inner"
-    )
+    ).head(1000)
     if merged_df.empty:
         raise ValueError("Merged DataFrame is empty. Check your data and merge keys.")
     merged_df.columns = [col.lower().strip() for col in merged_df.columns]
@@ -754,9 +873,9 @@ def train_pipeline():
               f"F1: {m['f1']:.4f}, Recall: {m['recall']:.4f}, Precision: {m['precision']:.4f}, "
               f"TPR: {m['tpr']:.4f}, FPR: {m['fpr']:.4f}")
     
-    
     all_true, all_pred = get_test_predictions(multimodal_model, test_loader, device)
     
+    # Prepare sensitive attribute groupings for evaluation
     sensitive_age = dataset.tensors[2][test_idx].detach().cpu().numpy().flatten()
     age_bins = [15, 30, 50, 70, 90]
     age_labels_bins = ['15-29', '30-49', '50-69', '70-89']
@@ -785,8 +904,6 @@ def train_pipeline():
         compute_eddi(all_true[:, 0], preds_mort, sens, threshold=0.5)[0]
         for sens in [sensitive_age_binned, sensitive_ethnicity_group, sensitive_insurance_group]
     ])
-
-
     print(f"\nAggregated Overall EDDI for Mortality: {agg_eddi_mort:.4f}")
     
     print("\nFor LOS Outcome:")
@@ -809,58 +926,30 @@ def train_pipeline():
     ])
     print(f"\nAggregated Overall EDDI for Mechanical Ventilation: {agg_eddi_mech:.4f}")
     
+    print("\n=== TPR and FPR Evaluation per Sensitive Attribute ===")
+    for outcome, y_true_out, y_pred_out in zip(["Mortality", "LOS", "Mechanical Ventilation"],
+                                               [all_true[:, 0], all_true[:, 1], all_true[:, 2]],
+                                               [preds_mort, preds_los, preds_mech]):
+        print(f"\nOutcome: {outcome}")
+        # Evaluate for Age groups
+        tpr_age, fpr_age, overall_tpr_age, overall_fpr_age = print_sensitive_tpr_fpr(
+            y_true_out, y_pred_out, sensitive_age_binned, "Age Groups", outcome
+        )
+        # Evaluate for Ethnicity groups
+        tpr_eth, fpr_eth, overall_tpr_eth, overall_fpr_eth = print_sensitive_tpr_fpr(
+            y_true_out, y_pred_out, sensitive_ethnicity_group, "Ethnicity", outcome
+        )
+        # Evaluate for Insurance groups
+        tpr_ins, fpr_ins, overall_tpr_ins, overall_fpr_ins = print_sensitive_tpr_fpr(
+            y_true_out, y_pred_out, sensitive_insurance_group, "Insurance", outcome
+        )
+        # Overall across all sensitive attributes (simply averaged)
+        overall_tpr_avg = np.mean([overall_tpr_age, overall_tpr_eth, overall_tpr_ins])
+        overall_fpr_avg = np.mean([overall_fpr_age, overall_fpr_eth, overall_fpr_ins])
+        print(f"\nAggregated Overall TPR for {outcome}: {overall_tpr_avg:.3f}")
+        print(f"Aggregated Overall FPR for {outcome}: {overall_fpr_avg:.3f}\n")
+    
     print("Training complete.")
-
-def evaluate_model_loss(model, dataloader, device, crit_mort, crit_los, crit_vent):
-    model.eval()
-    running_loss = 0.0
-    with torch.no_grad():
-        for batch in dataloader:
-            (dummy_input_ids, dummy_attn_mask,
-             age_ids, segment_ids, adm_loc_ids, discharge_loc_ids,
-             gender_ids, ethnicity_ids, insurance_ids,
-             aggregated_text_embedding,
-             labels_mortality, labels_los, labels_vent) = [x.to(device) for x in batch]
-            mort_logits, los_logits, vent_logits = model(
-                dummy_input_ids, dummy_attn_mask,
-                age_ids, segment_ids, adm_loc_ids, discharge_loc_ids,
-                gender_ids, ethnicity_ids, insurance_ids,
-                aggregated_text_embedding
-            )
-            loss_mort = crit_mort(mort_logits, labels_mortality.unsqueeze(1))
-            loss_los = crit_los(los_logits, labels_los.unsqueeze(1))
-            loss_vent = crit_vent(vent_logits, labels_vent.unsqueeze(1))
-            loss = loss_mort + loss_los + loss_vent
-            running_loss += loss.item()
-    return running_loss / len(dataloader)
-
-def get_test_predictions(model, dataloader, device):
-    all_true = []
-    all_pred = {'mortality': [], 'los': [], 'mech': []}
-    with torch.no_grad():
-        for batch in dataloader:
-            (dummy_input_ids, dummy_attn_mask,
-             age_ids, segment_ids, adm_loc_ids, discharge_loc_ids,
-             gender_ids, ethnicity_ids, insurance_ids,
-             aggregated_text_embedding,
-             labels_mortality, labels_los, labels_vent) = [x.to(device) for x in batch]
-            mortality_logits, los_logits, vent_logits = model(
-                dummy_input_ids, dummy_attn_mask,
-                age_ids, segment_ids, adm_loc_ids, discharge_loc_ids,
-                gender_ids, ethnicity_ids, insurance_ids,
-                aggregated_text_embedding
-            )
-            all_true.append(torch.cat([labels_mortality.unsqueeze(1),
-                                        labels_los.unsqueeze(1),
-                                        labels_vent.unsqueeze(1)], dim=1).detach().cpu().numpy())
-            all_pred['mortality'].append(torch.sigmoid(mortality_logits).detach().cpu().numpy())
-            all_pred['los'].append(torch.sigmoid(los_logits).detach().cpu().numpy())
-            all_pred['mech'].append(torch.sigmoid(vent_logits).detach().cpu().numpy())
-    all_true = np.vstack(all_true)
-    all_pred['mortality'] = np.vstack(all_pred['mortality']).squeeze()
-    all_pred['los'] = np.vstack(all_pred['los']).squeeze()
-    all_pred['mech'] = np.vstack(all_pred['mech']).squeeze()
-    return all_true, all_pred
 
 if __name__ == "__main__":
     train_pipeline()
