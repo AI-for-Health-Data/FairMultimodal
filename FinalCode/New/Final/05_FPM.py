@@ -11,7 +11,7 @@ from torch.optim import Adam, SGD, AdamW
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.utils.data import TensorDataset, DataLoader, Subset
 from transformers import BertModel, BertConfig, AutoTokenizer
-from sklearn.metrics import roc_auc_score, average_precision_score, f1_score, recall_score, precision_score
+from sklearn.metrics import confusion_matrix, roc_auc_score, average_precision_score, f1_score, recall_score, precision_score
 from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
@@ -20,7 +20,6 @@ from sklearn.preprocessing import StandardScaler
 from iterstrat.ml_stratifiers import MultilabelStratifiedShuffleSplit
 
 DEBUG = True
-
 
 class FocalLoss(nn.Module):
     def __init__(self, gamma=2, alpha=None, reduction='mean', pos_weight=None):
@@ -95,7 +94,7 @@ def compute_eddi(y_true, y_pred, sensitive_labels, threshold=0.5):
     eddi_attr = np.sqrt(np.sum(np.array(list(subgroup_eddi.values())) ** 2)) / len(unique_groups)
     return eddi_attr, subgroup_eddi
 
-
+# Updated sensitive attribute mapping functions
 def get_age_bucket(age):
     if 15 <= age <= 29:
         return "15-29"
@@ -106,16 +105,58 @@ def get_age_bucket(age):
     elif 70 <= age <= 89:
         return "70-89"
     else:
-        return "others"
+        return "Other"
 
 def map_ethnicity(code):
     mapping = {0: "white", 1: "black", 2: "hispanic", 3: "asian"}
-    return mapping.get(code, "others")
+    return mapping.get(code, "other")
 
 def map_insurance(code):
     mapping = {0: "government", 1: "medicare", 2: "medicaid", 3: "self pay", 4: "private"}
-    return mapping.get(code, "others")
+    return mapping.get(code, "other")
 
+def calculate_predictive_parity(y_true, y_pred, sensitive_attrs):
+    """
+    Calculate the predictive parity (precision equality) for each group defined by a sensitive attribute.
+    """
+    unique_groups = np.unique(sensitive_attrs)
+    precision_scores = {}
+    for group in unique_groups:
+        group_indices = sensitive_attrs == group
+        precision = precision_score(y_true[group_indices], y_pred[group_indices], zero_division=0, average='weighted')
+        precision_scores[group] = precision
+    return precision_scores
+
+def calculate_tpr_and_fpr(y_true, y_pred, group_mask):
+    """
+    Calculate True Positive Rate (TPR) and False Positive Rate (FPR) for a given group.
+    """
+    cm = confusion_matrix(y_true[group_mask], y_pred[group_mask], labels=[1, 0])
+    tn, fp, fn, tp = cm.ravel()
+    tpr = tp / (tp + fn) if (tp + fn) > 0 else 0
+    fpr = fp / (fp + tn) if (fp + tn) > 0 else 0
+    return tpr, fpr
+
+def calculate_subgroup_tpr_fpr(y_true, y_pred, sensitive_array):
+    """
+    For a given sensitive attribute array, calculate TPR and FPR for each subgroup.
+    Returns a dictionary mapping subgroup to its {TPR, FPR} and overall averages.
+    """
+    unique_groups = np.unique(sensitive_array)
+    results = {}
+    tpr_list = []
+    fpr_list = []
+    for group in unique_groups:
+        mask = (sensitive_array == group)
+        if np.sum(mask) == 0:
+            continue
+        tpr, fpr = calculate_tpr_and_fpr(y_true, y_pred, mask)
+        results[group] = {'TPR': tpr, 'FPR': fpr}
+        tpr_list.append(tpr)
+        fpr_list.append(fpr)
+    avg_tpr = np.mean(tpr_list) if tpr_list else 0
+    avg_fpr = np.mean(fpr_list) if fpr_list else 0
+    return results, avg_tpr, avg_fpr
 
 # BioClinicalBERT Fine-Tuning and Note Aggregation
 class BioClinicalBERT_FT(nn.Module):
@@ -191,7 +232,6 @@ class BEHRTModel(nn.Module):
 
     def forward(self, input_ids, attention_mask, age_ids, segment_ids, adm_loc_ids, disch_loc_ids,
                 gender_ids, ethnicity_ids, insurance_ids):
-        # Clamp indices
         age_ids = torch.clamp(age_ids, 0, self.age_embedding.num_embeddings - 1)
         segment_ids = torch.clamp(segment_ids, 0, self.segment_embedding.num_embeddings - 1)
         adm_loc_ids = torch.clamp(adm_loc_ids, 0, self.admission_loc_embedding.num_embeddings - 1)
@@ -217,16 +257,8 @@ class BEHRTModel(nn.Module):
 # Stacked Denoising Autoencoder (FPM Baseline)
 class StackedDenoisingAutoencoder(nn.Module):
     def __init__(self, input_dim, hidden_dims, noise_factor=0.05):
-        """
-        Args:
-          input_dim (int): dimensionality of input features.
-          hidden_dims (list): list of hidden layer sizes.
-          noise_factor (float): fraction of noise to add.
-        """
         super(StackedDenoisingAutoencoder, self).__init__()
-        self.noise_factor = noise_factor
-        
-        # Encoder
+        self.noise_factor = noise_factor        
         encoder_layers = []
         prev_dim = input_dim
         for h in hidden_dims:
@@ -234,8 +266,6 @@ class StackedDenoisingAutoencoder(nn.Module):
             encoder_layers.append(nn.ReLU())
             prev_dim = h
         self.encoder = nn.Sequential(*encoder_layers)
-        
-        # Decoder (reverse order)
         decoder_layers = []
         for h in hidden_dims[::-1]:
             decoder_layers.append(nn.Linear(prev_dim, h))
@@ -388,12 +418,11 @@ def evaluate_model_metrics(model, dataloader, device, threshold=0.5, print_eddi=
                          "recall": recall, "precision": precision,
                          "tpr": TPR, "fpr": FPR}
     
-    # EDDI Calculation if requested.
     if print_eddi:
-        # Fixed subgroup orders.
-        age_order = ["15-29", "30-49", "50-69", "70-89", "Other"]
-        ethnicity_order = ["white", "black", "asian", "hispanic", "other"]
-        insurance_order = ["government", "medicare", "medicaid", "private", "self pay", "other"]
+        # Standard subgroup orders
+        age_order_list = ["15-29", "30-49", "50-69", "70-89", "Other"]
+        ethnicity_order_list = ["white", "black", "asian", "hispanic", "other"]
+        insurance_order_list = ["government", "medicare", "medicaid", "self pay", "private", "other"]
         
         eddi_stats = {}
         for task, labels_np, probs in zip(["mortality", "los", "mechanical_ventilation"],
@@ -426,17 +455,17 @@ def evaluate_model_metrics(model, dataloader, device, threshold=0.5, print_eddi=
             eddi = eddi_stats[task]
             print("  Aggregated Age EDDI    : {:.4f}".format(eddi["age_eddi"]))
             print("  Age Subgroup EDDI:")
-            for bucket in age_order:
+            for bucket in age_order_list:
                 score = eddi["age_subgroup_eddi"].get(bucket, 0)
                 print(f"    {bucket}: {score:.4f}")
             print("  Aggregated Ethnicity EDDI: {:.4f}".format(eddi["ethnicity_eddi"]))
             print("  Ethnicity Subgroup EDDI:")
-            for group in ethnicity_order:
+            for group in ethnicity_order_list:
                 score = eddi["ethnicity_subgroup_eddi"].get(group, 0)
                 print(f"    {group}: {score:.4f}")
             print("  Aggregated Insurance EDDI: {:.4f}".format(eddi["insurance_eddi"]))
             print("  Insurance Subgroup EDDI:")
-            for group in insurance_order:
+            for group in insurance_order_list:
                 score = eddi["insurance_subgroup_eddi"].get(group, 0)
                 print(f"    {group}: {score:.4f}")
             print("  Final Overall {} EDDI: {:.4f}".format(task.capitalize(), eddi["final_EDDI"]))
@@ -480,7 +509,6 @@ def train_pipeline():
         print("Column 'age' not found in merged dataframe; creating default 'age' column with zeros.")
         merged_df["age"] = 0
 
-    # Convert outcome columns to int
     merged_df["short_term_mortality"] = merged_df["short_term_mortality"].astype(int)
     merged_df["los_binary"] = merged_df["los_binary"].astype(int)
     merged_df["mechanical_ventilation"] = merged_df["mechanical_ventilation"].astype(int)
@@ -604,7 +632,6 @@ def train_pipeline():
     print("NUM_ETHNICITIES:", NUM_ETHNICITIES)
     print("NUM_INSURANCES:", NUM_INSURANCES)
     
-    # Instantiate BEHRT Model
     behrt_model = BEHRTModel(
         num_diseases=NUM_DISEASES,
         num_ages=NUM_AGES,
@@ -617,7 +644,6 @@ def train_pipeline():
         hidden_size=768
     ).to(device)
     
-    # Pretraining FPM on Lab Features
     print("Number of lab feature columns:", len(lab_feature_columns))
     df_unique[lab_feature_columns] = df_unique[lab_feature_columns].fillna(0)
     lab_features_np = df_unique[lab_feature_columns].values.astype(np.float32)
@@ -643,7 +669,6 @@ def train_pipeline():
         _, patient_repr = fpm_model(lab_features_tensor.to(device))
     print("FPM pretraining complete. Learned patient representations shape:", patient_repr.shape)
     
-
     X_repr = patient_repr.cpu().numpy()
     scaler = StandardScaler()
     X_repr_scaled = scaler.fit_transform(X_repr)
@@ -676,7 +701,6 @@ def train_pipeline():
     ins_train = ins_attr[train_val_idx]
     ins_test = ins_attr[test_idx]
     
-    # Downstream Logistic Regression Evaluation
     print("\n--- Downstream Evaluation ---")
     
     clf_mort = train_downstream_classifier(X_train, y_mort_train)
@@ -709,7 +733,7 @@ def train_pipeline():
         "Mechanical Ventilation": (y_vent_test, y_vent_prob)
     }
     age_order = ["15-29", "30-49", "50-69", "70-89", "Other"]
-    ethnicity_order = ["white", "black", "hispanic", "asian", "other"]
+    ethnicity_order = ["white", "black", "asian", "hispanic", "other"]
     insurance_order = ["government", "medicare", "medicaid", "self pay", "private", "other"]
     sensitive_dict = {
         "Age": np.array([get_age_bucket(a) for a in age_test]),
@@ -737,7 +761,17 @@ def train_pipeline():
                 score = subgroup_eddi.get(subgroup, 0)
                 print(f"      {subgroup}: {score:.4f}")
     
-    # Multimodal Downstream Training Pipeline
+    print("\n--- Subgroup TPR and FPR Calculation for Each Outcome ---")
+    all_mort_preds = []
+    all_los_preds = []
+    all_vent_preds = []
+    all_mort_true = []
+    # Accumulate raw sensitive values from the test set.
+    all_age_sens_raw = []
+    all_eth_sens_raw = []
+    all_ins_sens_raw = []
+    multimodal_model = None  
+
     train_dataset = Subset(dataset, train_idx)
     val_dataset = Subset(dataset, val_idx)
     
@@ -881,10 +915,75 @@ def train_pipeline():
             print("  Ethnicity Subgroup EDDI:", stats["ethnicity_subgroup_eddi"])
             print("  Aggregated Insurance EDDI: {:.4f}".format(stats["insurance_eddi"]))
             print("  Insurance Subgroup EDDI:", stats["insurance_subgroup_eddi"])
-            print("  Final Overall EDDI     : {:.4f}".format(stats["final_EDDI"]))
+            print("  Final Overall {} EDDI: {:.4f}".format(outcome.capitalize(), stats["final_EDDI"]))
+    
+    # Compute subgroup TPR/FPR for each outcome
+    # Accumulate raw sensitive attributes from test loader
+    all_mort_preds = []
+    all_los_preds = []
+    all_vent_preds = []
+    all_mort_true = []
+    all_age_raw = []
+    all_eth_raw = []
+    all_ins_raw = []
+    
+    with torch.no_grad():
+        for batch in test_loader:
+            (dummy_input_ids, dummy_attn_mask,
+             age_ids, segment_ids, adm_loc_ids, discharge_loc_ids,
+             gender_ids, ethnicity_ids, insurance_ids,
+             aggregated_text_embedding,
+             labels_mortality, labels_los, labels_vent) = [x.to(device) for x in batch]
+            mortality_logits, los_logits, vent_logits = multimodal_model(
+                dummy_input_ids, dummy_attn_mask,
+                age_ids, segment_ids, adm_loc_ids, discharge_loc_ids,
+                gender_ids, ethnicity_ids, insurance_ids,
+                aggregated_text_embedding
+            )
+            mort_probs = torch.sigmoid(mortality_logits).cpu().numpy().squeeze()
+            los_probs = torch.sigmoid(los_logits).cpu().numpy().squeeze()
+            vent_probs = torch.sigmoid(vent_logits).cpu().numpy().squeeze()
+            all_mort_preds.extend((mort_probs > 0.5).astype(int).tolist())
+            all_los_preds.extend((los_probs > 0.5).astype(int).tolist())
+            all_vent_preds.extend((vent_probs > 0.5).astype(int).tolist())
+            all_mort_true.extend(labels_mortality.cpu().numpy().squeeze().tolist())
+            all_age_raw.extend(age_ids.cpu().numpy().squeeze().tolist())
+            all_eth_raw.extend(ethnicity_ids.cpu().numpy().squeeze().tolist())
+            all_ins_raw.extend(insurance_ids.cpu().numpy().squeeze().tolist())
+    
+    # Map raw sensitive values to subgroup labels using the mapping functions.
+    all_age_sens = [get_age_bucket(a) for a in all_age_raw]
+    all_eth_sens = [map_ethnicity(e) for e in all_eth_raw]
+    all_ins_sens = [map_insurance(i) for i in all_ins_raw]
+    
+    outcomes_pred = {
+        "Mortality": (np.array(all_mort_true), np.array(all_mort_preds)),
+        "LOS": (np.array(all_mort_true), np.array(all_los_preds)),  # Use same labels if separate ones aren't available.
+        "Mechanical Ventilation": (np.array(all_mort_true), np.array(all_vent_preds))
+    }
+    
+    overall_avg = {}
+    for outcome_name, (y_true, y_pred) in outcomes_pred.items():
+        print(f"\nOutcome: {outcome_name}")
+        avg_tprs = []
+        avg_fprs = []
+        for sens_name, sens_array in zip(["Age", "Ethnicity", "Insurance"],
+                                         [np.array(all_age_sens), np.array(all_eth_sens), np.array(all_ins_sens)]):
+            subgroup_results, avg_tpr, avg_fpr = calculate_subgroup_tpr_fpr(y_true, y_pred, sens_array)
+            print(f"  Sensitive Attribute: {sens_name}")
+            for group, metrics_dict in subgroup_results.items():
+                print(f"    Group {group}: TPR = {metrics_dict['TPR']:.3f}, FPR = {metrics_dict['FPR']:.3f}")
+            print(f"    Average TPR for {sens_name}: {avg_tpr:.3f}")
+            print(f"    Average FPR for {sens_name}: {avg_fpr:.3f}\n")
+            avg_tprs.append(avg_tpr)
+            avg_fprs.append(avg_fpr)
+        overall_avg_tpr = np.mean(avg_tprs) if avg_tprs else 0
+        overall_avg_fpr = np.mean(avg_fprs) if avg_fprs else 0
+        overall_avg[outcome_name] = {"Overall Average TPR": overall_avg_tpr, "Overall Average FPR": overall_avg_fpr}
+        print(f"Overall Average TPR for {outcome_name}: {overall_avg_tpr:.3f}")
+        print(f"Overall Average FPR for {outcome_name}: {overall_avg_fpr:.3f}")
     
     print("FPM Baseline training, evaluation, and fairness analysis complete.")
 
 if __name__ == "__main__":
     train_pipeline()
-
