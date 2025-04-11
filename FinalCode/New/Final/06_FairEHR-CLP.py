@@ -103,9 +103,6 @@ def print_subgroup_eddi(true, pred, sensitive_name, sensitive_values, outcome_na
     return subgroup_disparities, overall_eddi
 
 def calculate_fairness_metrics(labels, predictions, demographics, sensitive_class):
-    """
-    Calculate fairness metrics such as Equal Opportunity and Equal Odds.
-    """
     sensitive_indices = demographics == sensitive_class
     non_sensitive_indices = ~sensitive_indices
 
@@ -168,9 +165,6 @@ def calculate_predictive_parity(y_true, y_pred, sensitive_attrs):
     return precision_scores
 
 def calculate_tpr_and_fpr(y_true, y_pred, group_mask):
-    """
-    Calculate TPR and FPR for a given group.
-    """
     cm = confusion_matrix(y_true[group_mask], y_pred[group_mask], labels=[1, 0])
     tn, fp, fn, tp = cm.ravel()
     tpr = tp / (tp + fn) if (tp + fn) > 0 else 0
@@ -207,10 +201,7 @@ def calculate_equalized_odds_difference(y_true, y_pred, sensitive_attr):
     return avg_tpr_diff, avg_fpr_diff
 
 def print_sensitive_tpr_fpr(y_true, y_pred, sensitive_attr, attr_name, outcome_name, threshold=0.5):
-    """
-    For a given outcome and sensitive attribute, threshold the predictions, then compute and print the TPR and FPR per subgroup.
-    Also computes the overall (average) TPR and FPR across subgroups.
-    """
+    
     binary_pred = (y_pred > threshold).astype(int)
     unique_groups = np.unique(sensitive_attr)
     print(f"\nTPR and FPR for {outcome_name} by {attr_name}:")
@@ -503,7 +494,7 @@ def evaluate_model_metrics(model, dataloader, device, threshold=0.5, print_eddi=
     all_labels_mort = []
     all_labels_los = []
     all_labels_vent = []
-    all_sensitive = []  # using age as sensitive attribute for EDDI
+    all_sensitive = []  
     with torch.no_grad():
         for batch in dataloader:
             (dummy_input_ids, dummy_attn_mask,
@@ -654,7 +645,7 @@ def train_pipeline():
         unstructured_data,
         on=["subject_id", "hadm_id"],
         how="inner"
-    ).head(1000)
+    )
     if merged_df.empty:
         raise ValueError("Merged DataFrame is empty. Check your data and merge keys.")
     merged_df.columns = [col.lower().strip() for col in merged_df.columns]
@@ -875,7 +866,6 @@ def train_pipeline():
     
     all_true, all_pred = get_test_predictions(multimodal_model, test_loader, device)
     
-    # Prepare sensitive attribute groupings for evaluation
     sensitive_age = dataset.tensors[2][test_idx].detach().cpu().numpy().flatten()
     age_bins = [15, 30, 50, 70, 90]
     age_labels_bins = ['15-29', '30-49', '50-69', '70-89']
@@ -889,7 +879,6 @@ def train_pipeline():
     insurance_mapping = {0: 'Government', 1: 'Medicaid', 2: 'Medicare', 3: 'Private', 4: 'Self Pay'}
     sensitive_insurance_group = np.array([insurance_mapping.get(code, 'Other') for code in sensitive_insurance])
     
-    # Use predictions computed earlier
     preds_mort = all_pred['mortality']
     preds_los = all_pred['los']
     preds_mech = all_pred['mech']
@@ -931,23 +920,34 @@ def train_pipeline():
                                                [all_true[:, 0], all_true[:, 1], all_true[:, 2]],
                                                [preds_mort, preds_los, preds_mech]):
         print(f"\nOutcome: {outcome}")
-        # Evaluate for Age groups
         tpr_age, fpr_age, overall_tpr_age, overall_fpr_age = print_sensitive_tpr_fpr(
             y_true_out, y_pred_out, sensitive_age_binned, "Age Groups", outcome
         )
-        # Evaluate for Ethnicity groups
         tpr_eth, fpr_eth, overall_tpr_eth, overall_fpr_eth = print_sensitive_tpr_fpr(
             y_true_out, y_pred_out, sensitive_ethnicity_group, "Ethnicity", outcome
         )
-        # Evaluate for Insurance groups
         tpr_ins, fpr_ins, overall_tpr_ins, overall_fpr_ins = print_sensitive_tpr_fpr(
             y_true_out, y_pred_out, sensitive_insurance_group, "Insurance", outcome
         )
-        # Overall across all sensitive attributes (simply averaged)
         overall_tpr_avg = np.mean([overall_tpr_age, overall_tpr_eth, overall_tpr_ins])
         overall_fpr_avg = np.mean([overall_fpr_age, overall_fpr_eth, overall_fpr_ins])
         print(f"\nAggregated Overall TPR for {outcome}: {overall_tpr_avg:.3f}")
         print(f"Aggregated Overall FPR for {outcome}: {overall_fpr_avg:.3f}\n")
+    
+    print("\n=== Aggregated Equalized Odds Differences (Pairwise) ===")
+    threshold = 0.5
+    for outcome, y_true_out, y_pred_out in zip(["Mortality", "LOS", "Mechanical Ventilation"],
+                                               [all_true[:, 0], all_true[:, 1], all_true[:, 2]],
+                                               [preds_mort, preds_los, preds_mech]):
+        binary_pred = (y_pred_out > threshold).astype(int)
+        age_tpr_diff, age_fpr_diff = calculate_equalized_odds_difference(y_true_out, binary_pred, sensitive_age_binned)
+        eth_tpr_diff, eth_fpr_diff = calculate_equalized_odds_difference(y_true_out, binary_pred, sensitive_ethnicity_group)
+        ins_tpr_diff, ins_fpr_diff = calculate_equalized_odds_difference(y_true_out, binary_pred, sensitive_insurance_group)
+        aggregated_tpr_diff = np.mean([age_tpr_diff, eth_tpr_diff, ins_tpr_diff])
+        aggregated_fpr_diff = np.mean([age_fpr_diff, eth_fpr_diff, ins_fpr_diff])
+        print(f"\nAggregated Equalized Odds Differences for {outcome}:")
+        print(f"  Mean absolute pairwise TPR difference: {aggregated_tpr_diff:.3f}")
+        print(f"  Mean absolute pairwise FPR difference: {aggregated_fpr_diff:.3f}")
     
     print("Training complete.")
 
