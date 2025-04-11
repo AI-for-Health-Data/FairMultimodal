@@ -88,7 +88,6 @@ def map_insurance(val):
     mapping = {0: "government", 1: "medicare", 2: "medicaid", 3: "private", 4: "self pay"}
     return mapping.get(val, "other")
 
-# EDDI Calculation Function
 def compute_eddi(y_true, y_pred, sensitive_labels, threshold=0.5):
     y_pred_binary = (np.array(y_pred) > threshold).astype(int)
     unique_groups = np.unique(sensitive_labels)
@@ -157,7 +156,7 @@ def apply_bioclinicalbert_on_patient_notes(df, note_columns, tokenizer, model, d
 class BEHRTModel_DfC(nn.Module):
     def __init__(self, num_diseases, num_segments, num_admission_locs, num_discharge_locs, hidden_size=768):
         super(BEHRTModel_DfC, self).__init__()
-        vocab_size = num_diseases + num_segments + num_admission_locs + num_discharge_locs + 1  
+        vocab_size = num_diseases + num_segments + num_admission_locs + num_discharge_locs + 1  # +1 for special token
         config = BertConfig(
             vocab_size=vocab_size,
             hidden_size=hidden_size,
@@ -258,9 +257,6 @@ class CustomDataset(Dataset):
 
 
 def calculate_fairness_metrics(labels, predictions, demographics, sensitive_class):
-    """
-    Calculate fairness metrics such as Equal Opportunity and Equal Odds.
-    """
     sensitive_indices = demographics == sensitive_class
     non_sensitive_indices = ~sensitive_indices
 
@@ -415,8 +411,8 @@ def evaluate_model(model, dataloader, device, threshold=0.5, print_eddi=False):
     all_labels_los = []
     all_labels_mech = []
     all_age = []
-    all_ethnicity = []  # sensitive attributes as strings
-    all_insurance = []  # sensitive attributes as strings
+    all_ethnicity = []  
+    all_insurance = []  
 
     with torch.no_grad():
         for batch in dataloader:
@@ -547,7 +543,6 @@ def evaluate_model(model, dataloader, device, threshold=0.5, print_eddi=False):
             avg_tpr_diff, avg_fpr_diff = calculate_equalized_odds_difference(labels, predictions, groups)
             print(f" Overall Avg TPR Difference: {avg_tpr_diff:.3f}")
             print(f" Overall Avg FPR Difference: {avg_fpr_diff:.3f}")
-        # Combined fairness metric averaged over the three sensitive attributes.
         combined_metric = 0
         for groups in [age_groups, ethnicity_groups, insurance_groups]:
             avg_tpr, avg_fpr = calculate_equalized_odds_difference(labels, predictions, groups)
@@ -557,12 +552,10 @@ def evaluate_model(model, dataloader, device, threshold=0.5, print_eddi=False):
     
     return metrics
 
-# Training Pipeline Function (DfC Version: Demographic-Free)
 def train_pipeline():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("Using device:", device)
 
-    # Specify required columns.
     keep_cols = {"subject_id", "hadm_id", "short_term_mortality", "los_binary", 
                  "mechanical_ventilation", "age", "first_wardid", "last_wardid", 
                  "ethnicity", "insurance", "gender"}
@@ -627,8 +620,6 @@ def train_pipeline():
 
     df_unique = df_filtered.groupby("subject_id", as_index=False).first()
     print("Number of unique patients before sampling:", len(df_unique))
-    # Uncomment to sample a subset (e.g., first 1000 patients for testing)
-    # df_unique = df_unique.head(1000)
     print("Number of unique patients after sampling:", len(df_unique))
     if "segment" not in df_unique.columns:
         df_unique["segment"] = 0
