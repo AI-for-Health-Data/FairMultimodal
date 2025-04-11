@@ -11,13 +11,13 @@ import torch.nn.functional as F
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.utils.data import TensorDataset, DataLoader
-
+from sklearn.metrics import confusion_matrix, precision_score
 from transformers import BertModel, BertConfig, AutoTokenizer
-from sklearn.metrics import roc_auc_score, average_precision_score, f1_score, recall_score, precision_score, confusion_matrix
+from sklearn.metrics import (roc_auc_score, average_precision_score, f1_score, 
+                             recall_score, precision_score, confusion_matrix)
 from iterstrat.ml_stratifiers import MultilabelStratifiedShuffleSplit 
 
 DEBUG = True
-
 
 class FocalLoss(nn.Module):
     def __init__(self, gamma=2, alpha=None, reduction='mean', pos_weight=None):
@@ -91,6 +91,121 @@ def map_insurance(code):
     mapping = {0: "government", 1: "medicare", 2: "Medicaid", 3: "private", 4: "self pay"}
     return mapping.get(code, "other")
 
+def calculate_tpr_and_fpr(y_true, y_pred, group_mask):
+    if np.sum(group_mask) == 0:
+        return 0, 0
+    
+    y_true_group = y_true[group_mask]
+    y_pred_group = y_pred[group_mask]
+    
+    if len(y_true_group) == 0:
+        return 0, 0
+    
+    print(f"Group size: {len(y_true_group)}, Positive samples: {np.sum(y_true_group)}")
+    
+    cm = confusion_matrix(y_true_group, y_pred_group, labels=[0, 1])
+    
+    tn, fp, fn, tp = cm.ravel()
+    
+    tpr = float(tp) / float(tp + fn) if (tp + fn) > 0 else 0.0
+    fpr = float(fp) / float(fp + tn) if (fp + tn) > 0 else 0.0
+    
+    return tpr, fpr
+
+def calculate_equalized_odds_difference(y_true, y_pred, sensitive_attr):
+    unique_classes = np.unique(sensitive_attr)
+    if len(unique_classes) <= 1:
+        return 0.0, 0.0
+    
+    tpr_diffs = []
+    fpr_diffs = []
+    
+    print(f"Calculating EO differences for {len(unique_classes)} unique groups")
+    
+    tpr_values = {}
+    fpr_values = {}
+    
+    for group in unique_classes:
+        group_mask = sensitive_attr == group
+        group_size = np.sum(group_mask)
+        if group_size == 0:
+            continue
+            
+        tpr, fpr = calculate_tpr_and_fpr(y_true, y_pred, group_mask)
+        tpr_values[group] = tpr
+        fpr_values[group] = fpr
+        print(f"Group {group}: TPR={tpr:.4f}, FPR={fpr:.4f}, size={group_size}")
+    
+    for i, group1 in enumerate(unique_classes):
+        if group1 not in tpr_values:
+            continue
+        for group2 in unique_classes[i+1:]:
+            if group2 not in tpr_values:
+                continue
+            tpr1, fpr1 = tpr_values[group1], fpr_values[group1]
+            tpr2, fpr2 = tpr_values[group2], fpr_values[group2]
+            
+            tpr_diff = abs(tpr1 - tpr2)
+            fpr_diff = abs(fpr1 - fpr2)
+            
+            tpr_diffs.append(tpr_diff)
+            fpr_diffs.append(fpr_diff)
+            
+            print(f"Group {group1} vs {group2}: TPR diff={tpr_diff:.4f}, FPR diff={fpr_diff:.4f}")
+    
+    avg_tpr_diff = np.mean(tpr_diffs) if len(tpr_diffs) > 0 else 0.0
+    avg_fpr_diff = np.mean(fpr_diffs) if len(fpr_diffs) > 0 else 0.0
+    
+    print(f"Average TPR diff: {avg_tpr_diff:.4f}, Average FPR diff: {avg_fpr_diff:.4f}")
+    
+    return avg_tpr_diff, avg_fpr_diff
+
+def calculate_multiclass_fairness_metrics(y_true, y_pred, demographics):
+    unique_classes = np.unique(demographics)
+    metrics = {}
+
+    for sensitive_class in unique_classes:
+        sensitive_indices = demographics == sensitive_class
+        non_sensitive_indices = ~sensitive_indices
+
+        cm_sensitive = confusion_matrix(y_true[sensitive_indices], y_pred[sensitive_indices], labels=[0,1])
+        cm_non_sensitive = confusion_matrix(y_true[non_sensitive_indices], y_pred[non_sensitive_indices], labels=[0,1])
+        if cm_sensitive.size == 4:
+            tn_s, fp_s, fn_s, tp_s = cm_sensitive.ravel()
+        else:
+            tn_s = fp_s = fn_s = tp_s = 0
+        if cm_non_sensitive.size == 4:
+            tn_ns, fp_ns, fn_ns, tp_ns = cm_non_sensitive.ravel()
+        else:
+            tn_ns = fp_ns = fn_ns = tp_ns = 0
+
+        tpr_s = tp_s / (tp_s + fn_s) if (tp_s + fn_s) != 0 else 0
+        fpr_s = fp_s / (fp_s + tn_s) if (fp_s + tn_s) != 0 else 0
+
+        tpr_ns = tp_ns / (tp_ns + fn_ns) if (tp_ns + fn_ns) != 0 else 0
+        eod = tpr_s - tpr_ns
+        
+        fpr_ns = fp_ns / (fp_ns + tn_ns) if (fp_ns + tn_ns) != 0 else 0
+        eod_fpr = fpr_s - fpr_ns
+        avg_eod = (abs(eod) + abs(eod_fpr)) / 2
+
+        metrics[sensitive_class] = {
+            "TPR": tpr_s,
+            "FPR": fpr_s,
+            "Equal Opportunity Difference": eod,
+            "Average Equalized Odds Difference": avg_eod
+        }
+
+    return metrics
+
+def calculate_predictive_parity(y_true, y_pred, sensitive_attrs):
+    unique_groups = np.unique(sensitive_attrs)
+    precision_scores = {}
+    for group in unique_groups:
+        group_indices = sensitive_attrs == group
+        precision = precision_score(y_true[group_indices], y_pred[group_indices], zero_division=0)
+        precision_scores[group] = precision
+    return precision_scores
 
 # BioClinicalBERT Fine-Tuning
 class BioClinicalBERT_FT(nn.Module):
@@ -237,7 +352,6 @@ class MultimodalTransformer(nn.Module):
         raw_logit_lab  = classifier_lab(lab_proj)
         raw_logit_text = classifier_text(text_proj)
 
-        # Detach the logits for computing modality-specific probabilities.
         eddi_logit_demo = raw_logit_demo.detach()
         eddi_logit_lab  = raw_logit_lab.detach()
         eddi_logit_text = raw_logit_text.detach()
@@ -246,9 +360,7 @@ class MultimodalTransformer(nn.Module):
         lab_prob = torch.sigmoid(eddi_logit_lab)
         text_prob = torch.sigmoid(eddi_logit_text)
 
-        # If ground-truth and sensitive attributes are provided, compute EDDI.
         if (y_true is not None) and (sensitive_labels is not None):
-            # Ensure y_true is a numpy array.
             if torch.is_tensor(y_true):
                 y_true_np = y_true.cpu().numpy()
             else:
@@ -267,7 +379,6 @@ class MultimodalTransformer(nn.Module):
 
         eddi_max_val = max(eddi_demo_val, eddi_lab_val, eddi_text_val)
 
-        # Update weights using previous epoch's weight if available.
         if old_weights is not None:
             old_weight_demo, old_weight_lab, old_weight_text = old_weights
             weight_demo = old_weight_demo + beta * (eddi_max_val - eddi_demo_val)
@@ -280,7 +391,6 @@ class MultimodalTransformer(nn.Module):
 
         print(f"Modality weights - Demo: {weight_demo:.4f}, Lab: {weight_lab:.4f}, Text: {weight_text:.4f}")
 
-        # Fuse the logits based on the dynamic modality weights.
         fused_logit = raw_logit_demo * weight_demo + raw_logit_lab * weight_lab + raw_logit_text * weight_text
 
         details = {
@@ -298,23 +408,19 @@ class MultimodalTransformer(nn.Module):
         if beta is None:
             beta = self.beta
 
-        # Obtain modality embeddings.
         demo_embedding = self.behrt_demo(demo_dummy_ids, demo_attn_mask,
                                          age_ids, gender_ids, ethnicity_ids, insurance_ids)
         lab_embedding = self.behrt_lab(lab_features)
         text_embedding = aggregated_text_embedding
 
-        # Project each modality.
         demo_proj = self.demo_projector(demo_embedding)
         lab_proj = self.lab_projector(lab_embedding)
         text_proj = self.text_projector(text_embedding)
 
-        # Extract previous epoch weights (if any) per outcome.
         mort_old_weights = old_eddi_weights.get("mortality") if old_eddi_weights is not None else None
         los_old_weights = old_eddi_weights.get("los") if old_eddi_weights is not None else None
         mv_old_weights = old_eddi_weights.get("mechanical_ventilation") if old_eddi_weights is not None else None
 
-        # Extract y_true and sensitive labels for each outcome (if provided).
         mort_y_true = y_true_dict["mortality"] if (y_true_dict is not None and "mortality" in y_true_dict) else None
         mort_sensitive = sensitive_labels_dict["mortality"] if (sensitive_labels_dict is not None and "mortality" in sensitive_labels_dict) else None
 
@@ -324,7 +430,6 @@ class MultimodalTransformer(nn.Module):
         mv_y_true = y_true_dict["mechanical_ventilation"] if (y_true_dict is not None and "mechanical_ventilation" in y_true_dict) else None
         mv_sensitive = sensitive_labels_dict["mechanical_ventilation"] if (sensitive_labels_dict is not None and "mechanical_ventilation" in sensitive_labels_dict) else None
 
-        # Compute outcome-specific logits with dynamic weighting.
         mort_logit, mort_details = self.compute_weighted_logit(
             demo_proj, lab_proj, text_proj,
             self.classifier_demo_mort, self.classifier_lab_mort, self.classifier_text_mort,
@@ -346,7 +451,6 @@ class MultimodalTransformer(nn.Module):
                         "mechanical_ventilation": mv_details}
         return mort_logit, los_logit, mv_logit, eddi_details
 
-# Training, Validation, and Evaluation Steps
 def train_step(model, dataloader, optimizer, device, beta=0.3, loss_gamma=1.0, target=1.0, old_eddi_weights=None):
     model.train()
     running_loss = 0.0
@@ -358,13 +462,11 @@ def train_step(model, dataloader, optimizer, device, beta=0.3, loss_gamma=1.0, t
 
         optimizer.zero_grad()
 
-        # Create dictionaries for ground‐truth labels and sensitive attributes.
         y_true_dict = {
             "mortality": labels_mortality.cpu().numpy(),
             "los": labels_los.cpu().numpy(),
             "mechanical_ventilation": labels_mechvent.cpu().numpy()
         }
-        # For this example, we use gender as the sensitive attribute for all outcomes.
         sensitive_labels_dict = {
             "mortality": gender_ids.cpu().numpy(),
             "los": gender_ids.cpu().numpy(),
@@ -381,7 +483,6 @@ def train_step(model, dataloader, optimizer, device, beta=0.3, loss_gamma=1.0, t
         loss_mort = criterion_mortality(mort_logit, labels_mortality.unsqueeze(1))
         loss_los = criterion_los(los_logit, labels_los.unsqueeze(1))
         loss_mv = criterion_mech(mv_logit, labels_mechvent.unsqueeze(1))
-        # Example EDDI loss on the mortality branch (you may adjust this)
         eddi_loss = ((mort_logit - target) ** 2).mean()
         loss = loss_mort + loss_los + loss_mv + loss_gamma * eddi_loss
 
@@ -507,7 +608,7 @@ def evaluate_model_with_confusion(model, dataloader, device, threshold=0.5, old_
                          "recall": recall_val, "precision": precision_val,
                          "tpr": tpr, "fpr": fpr}
     
-    # Compute subgroup fairness (EDDI) for each outcome using demographic attributes.
+    # Compute subgroup fairness metrics using demographic attributes.
     all_age = torch.cat(all_age, dim=0).numpy().squeeze()
     all_ethnicity = torch.cat(all_ethnicity, dim=0).numpy().squeeze()
     all_insurance = torch.cat(all_insurance, dim=0).numpy().squeeze()
@@ -515,50 +616,59 @@ def evaluate_model_with_confusion(model, dataloader, device, threshold=0.5, old_
     ethnicity_groups = np.array([map_ethnicity(e) for e in all_ethnicity])
     insurance_groups = np.array([map_insurance(i) for i in all_insurance])
 
-    # Mortality fairness
-    overall_age_mort, age_eddi_sub_mort = compute_eddi(labels_mort_np.astype(int), mort_probs, age_groups, threshold)
-    overall_eth_mort, eth_eddi_sub_mort = compute_eddi(labels_mort_np.astype(int), mort_probs, ethnicity_groups, threshold)
-    overall_ins_mort, ins_eddi_sub_mort = compute_eddi(labels_mort_np.astype(int), mort_probs, insurance_groups, threshold)
-    total_eddi_mort = np.sqrt((overall_age_mort**2 + overall_eth_mort**2 + overall_ins_mort**2)) / 3
-    eddi_stats_mort = {"age_eddi": overall_age_mort,
-                       "age_subgroup_eddi": age_eddi_sub_mort,
-                       "ethnicity_eddi": overall_eth_mort,
-                       "ethnicity_subgroup_eddi": eth_eddi_sub_mort,
-                       "insurance_eddi": overall_ins_mort,
-                       "insurance_subgroup_eddi": ins_eddi_sub_mort,
-                       "final_EDDI": total_eddi_mort}
+    eddi_stats = {}
+    for outcome, probs, labels in zip(["mortality", "los", "mechanical_ventilation"],
+                                      [mort_probs, los_probs, mv_probs],
+                                      [labels_mort_np, labels_los_np, labels_mv_np]):
+        overall_age, age_eddi_sub = compute_eddi(labels.astype(int), probs, age_groups, threshold)
+        overall_eth, eth_eddi_sub = compute_eddi(labels.astype(int), probs, ethnicity_groups, threshold)
+        overall_ins, ins_eddi_sub = compute_eddi(labels.astype(int), probs, insurance_groups, threshold)
+        total_eddi = np.sqrt((overall_age**2 + overall_eth**2 + overall_ins**2)) / 3
+        eddi_stats[outcome] = {
+            "age_eddi": overall_age,
+            "age_subgroup_eddi": age_eddi_sub,
+            "ethnicity_eddi": overall_eth,
+            "ethnicity_subgroup_eddi": eth_eddi_sub,
+            "insurance_eddi": overall_ins,
+            "insurance_subgroup_eddi": ins_eddi_sub,
+            "final_EDDI": total_eddi
+        }
+    metrics["eddi_stats"] = eddi_stats
+
     
-    # Length of Stay fairness
-    overall_age_los, age_eddi_sub_los = compute_eddi(labels_los_np.astype(int), los_probs, age_groups, threshold)
-    overall_eth_los, eth_eddi_sub_los = compute_eddi(labels_los_np.astype(int), los_probs, ethnicity_groups, threshold)
-    overall_ins_los, ins_eddi_sub_los = compute_eddi(labels_los_np.astype(int), los_probs, insurance_groups, threshold)
-    total_eddi_los = np.sqrt((overall_age_los**2 + overall_eth_los**2 + overall_ins_los**2)) / 3
-    eddi_stats_los = {"age_eddi": overall_age_los,
-                      "age_subgroup_eddi": age_eddi_sub_los,
-                      "ethnicity_eddi": overall_eth_los,
-                      "ethnicity_subgroup_eddi": eth_eddi_sub_los,
-                      "insurance_eddi": overall_ins_los,
-                      "insurance_subgroup_eddi": ins_eddi_sub_los,
-                      "final_EDDI": total_eddi_los}
+    fairness_metrics = {}
+    mort_preds = (mort_probs > threshold).astype(int)
+    los_preds  = (los_probs > threshold).astype(int)
+    mv_preds   = (mv_probs > threshold).astype(int)
     
-    # Mechanical Ventilation fairness
-    overall_age_mv, age_eddi_sub_mv = compute_eddi(labels_mv_np.astype(int), mv_probs, age_groups, threshold)
-    overall_eth_mv, eth_eddi_sub_mv = compute_eddi(labels_mv_np.astype(int), mv_probs, ethnicity_groups, threshold)
-    overall_ins_mv, ins_eddi_sub_mv = compute_eddi(labels_mv_np.astype(int), mv_probs, insurance_groups, threshold)
-    total_eddi_mv = np.sqrt((overall_age_mv**2 + overall_eth_mv**2 + overall_ins_mv**2)) / 3
-    eddi_stats_mv = {"age_eddi": overall_age_mv,
-                     "age_subgroup_eddi": age_eddi_sub_mv,
-                     "ethnicity_eddi": overall_eth_mv,
-                     "ethnicity_subgroup_eddi": eth_eddi_sub_mv,
-                     "insurance_eddi": overall_ins_mv,
-                     "insurance_subgroup_eddi": ins_eddi_sub_mv,
-                     "final_EDDI": total_eddi_mv}
+    for outcome, labels, preds in zip(["mortality", "los", "mechanical_ventilation"],
+                                      [labels_mort_np, labels_los_np, labels_mv_np],
+                                      [mort_preds, los_preds, mv_preds]):
+        outcome_fairness = {}
+        for attr_name, attr_values in zip(["age", "ethnicity", "insurance"],
+                                          [age_groups, ethnicity_groups, insurance_groups]):
+            avg_tpr_diff, avg_fpr_diff = calculate_equalized_odds_difference(labels, preds, attr_values)
+            combined_metric = (avg_tpr_diff + avg_fpr_diff) / 2
+            outcome_fairness[attr_name] = {
+                "Average TPR Difference": avg_tpr_diff,
+                "Average FPR Difference": avg_fpr_diff,
+                "Combined Equalized Odds Metric": combined_metric,
+                "Group Fairness Metrics": calculate_multiclass_fairness_metrics(labels, preds, attr_values),
+                "Predictive Parity": calculate_predictive_parity(labels, preds, attr_values)
+            }
+        fairness_metrics[outcome] = outcome_fairness
     
-    metrics["eddi_stats"] = {
-        "mortality": eddi_stats_mort,
-        "los": eddi_stats_los,
-        "mechanical_ventilation": eddi_stats_mv
-    }
+    overall_eo_metrics = {}
+    for outcome in ["mortality", "los", "mechanical_ventilation"]:
+        eo_vals = []
+        for attr in ["age", "ethnicity", "insurance"]:
+            eo = fairness_metrics[outcome][attr]["Combined Equalized Odds Metric"]
+            eo_vals.append(eo)
+        overall_eo = np.mean(eo_vals)
+        overall_eo_metrics[outcome] = overall_eo
+    metrics["overall_eo_metrics"] = overall_eo_metrics
+
+    metrics["fairness_metrics"] = fairness_metrics
     return metrics
 
 def evaluate_model(model, dataloader, device, threshold=0.5, old_eddi_weights=None):
@@ -566,7 +676,6 @@ def evaluate_model(model, dataloader, device, threshold=0.5, old_eddi_weights=No
     return metrics
 
 
-# Training Pipeline
 def train_pipeline():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("Using device:", device)
@@ -748,7 +857,6 @@ def train_pipeline():
     best_val_loss = float('inf')
     epochs_no_improve = 0
 
-    # Initialize old_eddi_weights as an empty dict.
     old_eddi_weights = {}
 
     for epoch in range(max_epochs):
@@ -773,6 +881,17 @@ def train_pipeline():
         for outcome in ["mortality", "los", "mechanical_ventilation"]:
             eddi = val_metrics["eddi_stats"][outcome]["final_EDDI"]
             print(f"  {outcome.capitalize()} EDDI: {eddi:.4f}")
+        print("\nFairness Metrics (Equalized Odds) on Validation Set:")
+        for outcome, fm in val_metrics["fairness_metrics"].items():
+            print(f"\nOutcome: {outcome.capitalize()}")
+            for attr, vals in fm.items():
+                print(f"  {attr.capitalize()}:")
+                print(f"    Avg TPR Diff: {vals['Average TPR Difference']:.4f}")
+                print(f"    Avg FPR Diff: {vals['Average FPR Difference']:.4f}")
+                print(f"    Combined Equalized Odds Metric: {vals['Combined Equalized Odds Metric']:.4f}")
+        print("\nOverall EO Metrics (averaged over age, ethnicity, insurance):")
+        for outcome, overall_eo in val_metrics["overall_eo_metrics"].items():
+            print(f"  {outcome.capitalize()} Overall EO: {overall_eo:.4f}")
         
         scheduler.step(val_loss_epoch)
         
@@ -788,7 +907,6 @@ def train_pipeline():
             print(f"Early stopping triggered after {patience_limit} epochs with no improvement.")
             break
 
-        # Update old_eddi_weights from the last validation batch.
         if last_eddi_details is not None:
             old_eddi_weights = {
                 "mortality": last_eddi_details["mortality"]["weights"],
@@ -816,7 +934,6 @@ def train_pipeline():
         print("  F1 Score  : {:.4f}".format(m["f1"]))
         print("  Recall    : {:.4f}".format(m["recall"]))
         print("  Precision : {:.4f}".format(m["precision"]))
-
     print("\n--- Final Detailed EDDI Statistics ---")
     for outcome in ["mortality", "los", "mechanical_ventilation"]:
         eddi_stats = final_metrics["eddi_stats"][outcome]
@@ -837,6 +954,20 @@ def train_pipeline():
             score = eddi_stats["insurance_subgroup_eddi"].get(group, 0)
             print(f"    {group}: {score:.4f}")
         print("  Final Overall EDDI: {:.4f}".format(eddi_stats["final_EDDI"]))
+
+    print("\n--- Additional Fairness Metrics on Test Set ---")
+    fairness_final = final_metrics["fairness_metrics"]
+    for outcome, fm in fairness_final.items():
+        print(f"\nOutcome: {outcome.capitalize()}")
+        for attr, vals in fm.items():
+            print(f"  {attr.capitalize()}:")
+            print(f"    Avg TPR Diff: {vals['Average TPR Difference']:.4f}")
+            print(f"    Avg FPR Diff: {vals['Average FPR Difference']:.4f}")
+            print(f"    Combined Equalized Odds Metric: {vals['Combined Equalized Odds Metric']:.4f}")
+    
+    print("\n--- Overall EO Metrics on Test Set ---")
+    for outcome, overall_eo in final_metrics["overall_eo_metrics"].items():
+        print(f"  {outcome.capitalize()} Overall EO: {overall_eo:.4f}")
     
     print("\nTesting complete.")
 
