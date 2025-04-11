@@ -3,6 +3,7 @@ import random
 import argparse
 import numpy as np
 import pandas as pd
+import itertools
 from tqdm import tqdm
 import torch
 import torch.nn as nn
@@ -22,11 +23,7 @@ import os
 DEBUG = True
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-
 def calculate_fairness_metrics(labels, predictions, demographics, sensitive_class):
-    """
-    Calculate fairness metrics such as Equal Opportunity and Equal Odds for a given sensitive_class.
-    """
     sensitive_indices = demographics == sensitive_class
     non_sensitive_indices = ~sensitive_indices
 
@@ -41,7 +38,7 @@ def calculate_fairness_metrics(labels, predictions, demographics, sensitive_clas
 
     eod = tpr_s - tpr_ns
     eod_fpr = fpr_s - fpr_ns
-    eod_tpr = tpr_s - tpr_ns
+    eod_tpr = eod
     avg_eod = (abs(eod_fpr) + abs(eod_tpr)) / 2
 
     return {
@@ -56,9 +53,6 @@ def calculate_fairness_metrics(labels, predictions, demographics, sensitive_clas
     }
 
 def calculate_multiclass_fairness_metrics(labels, predictions, demographics):
-    """
-    Calculate fairness metrics for all classes in the sensitive attribute.
-    """
     unique_classes = np.unique(demographics)
     metrics = {}
 
@@ -71,10 +65,11 @@ def calculate_multiclass_fairness_metrics(labels, predictions, demographics):
 
         tpr_s = tp_s / (tp_s + fn_s) if (tp_s + fn_s) != 0 else 0
         fpr_s = fp_s / (fp_s + tn_s) if (fp_s + tn_s) != 0 else 0
-
         tpr_ns = tp_ns / (tp_ns + fn_ns) if (tp_ns + fn_ns) != 0 else 0
+
         eod = tpr_s - tpr_ns
-        avg_eod = (abs(fp_s / (fp_s + tn_s) - (fp_ns / (fp_ns + tn_ns))) + abs(eod)) / 2
+        fpr_ns = fp_ns / (fp_ns + tn_ns) if (fp_ns + tn_ns) != 0 else 0
+        avg_eod = (abs(fpr_s - fpr_ns) + abs(eod)) / 2
 
         metrics[sensitive_class] = {
             "TPR": tpr_s,
@@ -86,9 +81,6 @@ def calculate_multiclass_fairness_metrics(labels, predictions, demographics):
     return metrics
 
 def calculate_predictive_parity(y_true, y_pred, sensitive_attrs):
-    """
-    Calculate the predictive parity (precision equality) for each group defined by a sensitive attribute.
-    """
     unique_groups = np.unique(sensitive_attrs)
     precision_scores = {}
 
@@ -100,9 +92,6 @@ def calculate_predictive_parity(y_true, y_pred, sensitive_attrs):
     return precision_scores
 
 def calculate_tpr_and_fpr(y_true, y_pred, group_mask):
-    """
-    Calculate True Positive Rate (TPR) and False Positive Rate (FPR) for a given group.
-    """
     cm = confusion_matrix(np.array(y_true)[group_mask], np.array(y_pred)[group_mask], labels=[1, 0])
     tn, fp, fn, tp = cm.ravel()
     tpr = tp / (tp + fn) if (tp + fn) > 0 else 0
@@ -110,9 +99,6 @@ def calculate_tpr_and_fpr(y_true, y_pred, group_mask):
     return tpr, fpr
 
 def calculate_sd_for_rates(y_true, y_pred, sensitive_attr):
-    """
-    Calculate the standard deviation of TPR and FPR across all classes of a sensitive attribute.
-    """
     unique_classes = np.unique(sensitive_attr)
     tpr_values = []
     fpr_values = []
@@ -123,15 +109,11 @@ def calculate_sd_for_rates(y_true, y_pred, sensitive_attr):
         tpr_values.append(tpr)
         fpr_values.append(fpr)
 
-    sd_tpr = np.std(tpr_values, ddof=1)  # Sample standard deviation
+    sd_tpr = np.std(tpr_values, ddof=1)
     sd_fpr = np.std(fpr_values, ddof=1)
-    
     return sd_tpr, sd_fpr
 
 def calculate_equalized_odds_difference(y_true, y_pred, sensitive_attr):
-    """
-    Calculate the average absolute differences in TPR and FPR over all pairs of sensitive groups.
-    """
     unique_classes = np.unique(sensitive_attr)
     tpr_diffs = []
     fpr_diffs = []
@@ -142,14 +124,13 @@ def calculate_equalized_odds_difference(y_true, y_pred, sensitive_attr):
             group2_mask = sensitive_attr == group2
             tpr1, fpr1 = calculate_tpr_and_fpr(y_true, y_pred, group1_mask)
             tpr2, fpr2 = calculate_tpr_and_fpr(y_true, y_pred, group2_mask)
-
             tpr_diffs.append(abs(tpr1 - tpr2))
             fpr_diffs.append(abs(fpr1 - fpr2))
 
     avg_tpr_diff = np.mean(tpr_diffs)
     avg_fpr_diff = np.mean(fpr_diffs)
-
     return avg_tpr_diff, avg_fpr_diff
+
 
 class FocalLoss(nn.Module):
     def __init__(self, gamma=2, alpha=None, reduction='mean', pos_weight=None):
@@ -337,7 +318,7 @@ class MultimodalTransformer(nn.Module):
             nn.Linear(256 + 256, hidden_size),
             nn.ReLU(),
             nn.Dropout(0.1),
-            nn.Linear(hidden_size, 3)  # Predict three outcomes: mortality, LOS, mechanical ventilation.
+            nn.Linear(hidden_size, 3) 
         )
 
     def forward(self, dummy_input_ids, dummy_attn_mask, 
@@ -542,7 +523,6 @@ def evaluate_model_metrics(model, dataloader, device, threshold=0.5, print_eddi=
                 print(f"    {group}: {score:.4f}")
             print("  Final Overall {} EDDI: {:.4f}".format(task.capitalize(), eddi["final_EDDI"]))
 
-    # Calculate subgroup TPR and FPR for each sensitive attribute (age, ethnicity, insurance)
     sensitive_attrs = {
         "age": np.array([get_age_bucket(a) for a in torch.cat(all_age, dim=0).numpy().squeeze()]),
         "ethnicity": np.array([map_ethnicity(e) for e in torch.cat(all_ethnicity, dim=0).numpy().squeeze()]),
@@ -551,49 +531,26 @@ def evaluate_model_metrics(model, dataloader, device, threshold=0.5, print_eddi=
     outcome_names = ["mortality", "los", "mechanical_ventilation"]
     probs_list = [mort_probs, los_probs, mech_probs]
     labels_list = [labels_mort_np, labels_los_np, labels_mech_np]
-    fairness_results = {}
+    
+    print("\n--- Overall Aggregated Equalized Odds Metrics for each Outcome ---")
     for outcome, probs, labels in zip(outcome_names, probs_list, labels_list):
         preds = (probs > threshold).astype(int)
-        fairness_results[outcome] = {}
-        for attr_name, attr_values in sensitive_attrs.items():
-            unique_groups = np.unique(attr_values)
-            fairness_results[outcome][attr_name] = {}
-            tpr_list = []
-            fpr_list = []
-            for group in unique_groups:
-                group_mask = attr_values == group
-                tpr, fpr = calculate_tpr_and_fpr(labels, preds, group_mask)
-                fairness_results[outcome][attr_name][group] = {"TPR": tpr, "FPR": fpr}
-                tpr_list.append(tpr)
-                fpr_list.append(fpr)
-            overall_tpr = np.mean(tpr_list)
-            overall_fpr = np.mean(fpr_list)
-            fairness_results[outcome][attr_name]["overall"] = {"average_TPR": overall_tpr, "average_FPR": overall_fpr}
-    print("\n--- Fairness Metrics (TPR & FPR) per Sensitive Attribute and Outcome ---")
-    for outcome in outcome_names:
-        print(f"\nOutcome: {outcome.capitalize()}")
-        for attr_name in sensitive_attrs.keys():
-            print(f" Sensitive attribute: {attr_name.capitalize()}")
-            for key, val in fairness_results[outcome][attr_name].items():
-                if key == "overall":
-                    print(f"   Overall - Average TPR: {val['average_TPR']:.3f}, Average FPR: {val['average_FPR']:.3f}")
-                else:
-                    print(f"   {key}: TPR: {val['TPR']:.3f}, FPR: {val['FPR']:.3f}")
-
-    # Calculate overall Equalized Odds Metrics for each sensitive attribute
-    print("\n--- Overall Equalized Odds Metrics for each Sensitive Attribute and Outcome ---")
-    for outcome, probs, labels in zip(outcome_names, probs_list, labels_list):
-        preds = (probs > threshold).astype(int)
+        tpr_diffs = []
+        fpr_diffs = []
         print(f"\nOutcome: {outcome.capitalize()}")
         for attr_name, attr_values in sensitive_attrs.items():
             avg_tpr_diff, avg_fpr_diff = calculate_equalized_odds_difference(labels, preds, attr_values)
-            combined_metric = (avg_tpr_diff + avg_fpr_diff) / 2
-            print(f" {attr_name.capitalize()} - Average TPR Difference: {avg_tpr_diff:.3f}, Average FPR Difference: {avg_fpr_diff:.3f}, Combined Metric: {combined_metric:.3f}")
-    # ------------------ End New Fairness Metrics Section ------------------
+            tpr_diffs.append(avg_tpr_diff)
+            fpr_diffs.append(avg_fpr_diff)
+            print(f" {attr_name.capitalize()} - Average TPR Difference: {avg_tpr_diff:.3f}, Average FPR Difference: {avg_fpr_diff:.3f}")
+        aggregated_tpr_diff = np.mean(tpr_diffs)
+        aggregated_fpr_diff = np.mean(fpr_diffs)
+        overall_EO = (aggregated_tpr_diff + aggregated_fpr_diff) / 2
+        print(f" Overall Aggregated TPR Difference: {aggregated_tpr_diff:.3f}")
+        print(f" Overall Aggregated FPR Difference: {aggregated_fpr_diff:.3f}")
+        print(f" Overall Equalized Odds Metric (Mean of Aggregated TPR & FPR): {overall_EO:.3f}")
 
     return metrics
-
-import itertools
 
 hyperparameter_list = ['learning_rate', 'num_iters', 'num_nodes', 'num_nodes_adv', 'dropout_rate', 'alpha']
 get_new_control_indices = False
@@ -677,7 +634,7 @@ class Adv_Model(object):
         if self.adversarial:
             num_nodes_adv = self.hyperparameters['num_nodes_adv'][indexes[3]]
             num_nodes_out = self.num_classes if self.num_classes > 2 else 1
-            n_adv = 2  # predictor output and label concatenated.
+            n_adv = 2  
             if self.num_classes > 2:
                 model['adversarial_model'] = nn.Sequential(
                     nn.Linear(n_adv, num_nodes_adv),
@@ -714,6 +671,7 @@ class Adv_Model(object):
         Xvalid = torch.tensor(self.params['Xvalid'].values).float()
         yvalid = torch.tensor(self.params['yvalid'].values).float().view(-1, 1)
         ztrain = torch.tensor(self.params['ztrain'].values).long().view(-1)
+        ztrain = (ztrain > 0).float()
 
         if not use_data_as_is:
             idx_case = [i for i in range(len(ytrain)) if ytrain[i] == 1]
@@ -733,15 +691,14 @@ class Adv_Model(object):
             ytrain = torch.cat((ytrain[matched_cohort_indices, :], ytrain[idx_case, :]), dim=0)
             ztrain = torch.cat((ztrain[matched_cohort_indices], ztrain[idx_case]), dim=0)
 
-        # --- Resample X, y, and z together ---
         from imblearn.combine import SMOTEENN
         from imblearn.under_sampling import EditedNearestNeighbours
         resample = SMOTEENN(enn=EditedNearestNeighbours(sampling_strategy='majority'), random_state=25)
-        # Concatenate ztrain as an extra column to Xtrain
         Xz = np.concatenate((Xtrain.numpy(), ztrain.numpy().reshape(-1, 1)), axis=1)
         Xz_res, ytrain_res = resample.fit_resample(Xz, ytrain.numpy())
         Xtrain = torch.tensor(Xz_res[:, :-1]).float()
         ztrain = torch.tensor(Xz_res[:, -1]).long()
+        ztrain = (ztrain > 0).float()
         ytrain = torch.tensor(ytrain_res).float().view(-1, 1)
 
         if self.adversarial:
@@ -759,7 +716,7 @@ class Adv_Model(object):
             if self.adversarial:
                 adv_input_train = torch.cat((ypred_train, ytrain), dim=1)
                 zpred_train = adv_model(adv_input_train)
-                adv_loss_train = adv_loss_function(zpred_train.squeeze(), ztrain.float())
+                adv_loss_train = adv_loss_function(zpred_train.squeeze(), ztrain)
                 combined_loss_train = loss_train - self.hyperparameters['alpha'][indexes[5]] * adv_loss_train + loss_train/(adv_loss_train+1e-8)
             else:
                 combined_loss_train = loss_train
@@ -779,7 +736,10 @@ class Adv_Model(object):
             if self.adversarial:
                 adv_input_valid = torch.cat((ypred_valid, yvalid), dim=1)
                 zpred_valid = adv_model(adv_input_valid)
-                adv_loss_valid = adv_loss_function(zpred_valid.squeeze(), torch.tensor(self.params['zvalid'].values).long())
+                adv_loss_valid = adv_loss_function(
+                    zpred_valid.squeeze(),
+                    (torch.tensor(self.params['zvalid'].values).view(-1) > 0).float()
+                )
                 combined_loss_valid = loss_valid - self.hyperparameters['alpha'][indexes[5]] * adv_loss_valid + loss_valid/(adv_loss_valid+1e-8)
             else:
                 combined_loss_valid = loss_valid
@@ -815,7 +775,8 @@ class Adv_Model(object):
         model = self.model[indexes]['model']
         Xvalid = torch.tensor(self.params['Xvalid'].values).float()
         yvalid = torch.tensor(self.params['yvalid'].values).float().view(-1, 1)
-        zvalid = torch.tensor(self.params['zvalid'].values).long().view(-1)
+        # For evaluation, convert sensitive attribute to binary as well.
+        zvalid = (torch.tensor(self.params['zvalid'].values).long() > 0).float().view(-1)
         ypred_valid = model(Xvalid)
         zpred_valid = None
         if self.adversarial:
@@ -876,7 +837,7 @@ if __name__ == '__main__':
         unstructured_data,
         on=["subject_id", "hadm_id"],
         how="inner"
-    ).head(1000)
+    )
     if merged_df.empty:
         raise ValueError("Merged DataFrame is empty. Check your data and merge keys.")
 
@@ -931,7 +892,6 @@ if __name__ == '__main__':
     y_df = df_unique[["short_term_mortality"]].copy()
     z_df = df_unique[["ethnicity"]].copy()  # sensitive attribute
 
-    # Convert binary outcome into a multilabel indicator (one-hot encoded)
     y_values = y_df.values.astype(int).reshape(-1)
     labels_array = np.concatenate([(y_values == 0).astype(int).reshape(-1,1),
                                    (y_values == 1).astype(int).reshape(-1,1)], axis=1)
@@ -1107,7 +1067,7 @@ if __name__ == '__main__':
 
     print("Training complete.")
 
-if __name__ == "__main__":
+    # Parameters for adversarial debiasing model
     params = {
         'Xtrain': X_df.iloc[train_idx].reset_index(drop=True),
         'ytrain': y_df.iloc[train_idx].reset_index(drop=True),
@@ -1115,7 +1075,7 @@ if __name__ == "__main__":
         'yvalid': y_df.iloc[val_idx].reset_index(drop=True),
         'ztrain': z_df.iloc[train_idx].reset_index(drop=True),
         'zvalid': z_df.iloc[val_idx].reset_index(drop=True),
-        'method': 'adv',  # adversarial debiasing
+        'method': 'adv',  # adversarial debiasing method
         'num_classes': 2,
         'hyperparameters': {
             'learning_rate': [1e-4, 5e-5],
