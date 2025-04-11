@@ -1,4 +1,3 @@
-import os
 import re
 import math
 import time
@@ -8,12 +7,79 @@ import torch
 import torch.nn as nn
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import ReduceLROnPlateau
-from torch.utils.data import Dataset, DataLoader, random_split, TensorDataset
+from torch.utils.data import Dataset, DataLoader, random_split, TensorDataset, Subset
 from sklearn.metrics import roc_auc_score, precision_score, recall_score, f1_score, precision_recall_curve, auc, confusion_matrix
 from scipy.special import expit
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 from transformers import BertModel, BertConfig
+from iterstrat.ml_stratifiers import MultilabelStratifiedShuffleSplit
+
+def calculate_tpr_and_fpr(y_true, y_pred):
+    tp = np.sum((y_true == 1) & (y_pred == 1))
+    tn = np.sum((y_true == 0) & (y_pred == 0))
+    fp = np.sum((y_true == 0) & (y_pred == 1))
+    fn = np.sum((y_true == 1) & (y_pred == 0))
+    tpr = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+    fpr = fp / (fp + tn) if (fp + tn) > 0 else 0.0
+    return tpr, fpr
+
+def calculate_equalized_odds_difference(tpr_dict, fpr_dict):
+    
+    groups = list(tpr_dict.keys())
+    n = len(groups)
+    if n == 0:
+        return {'EOTPR': 0.0, 'EOFPR': 0.0, 'EO': 0.0}
+    tpr_diff_sum = 0.0
+    fpr_diff_sum = 0.0
+    for i in range(n):
+        for j in range(i+1, n):
+            tpr_diff_sum += abs(tpr_dict[groups[i]] - tpr_dict[groups[j]])
+            fpr_diff_sum += abs(fpr_dict[groups[i]] - fpr_dict[groups[j]])
+    EOTPR = tpr_diff_sum / (n**2)
+    EOFPR = fpr_diff_sum / (n**2)
+    EO_metric = (EOTPR + EOFPR) / 2.0
+    return {'EOTPR': EOTPR, 'EOFPR': EOFPR, 'EO': EO_metric}
+
+def calculate_predictive_parity(sensitive_attr, y_true, y_pred):
+    unique_groups = np.unique(sensitive_attr)
+    group_precision = {}
+    for group in unique_groups:
+        mask = (sensitive_attr == group)
+        true_positives = np.sum((y_true[mask] == 1) & (y_pred[mask] == 1))
+        total_predicted = np.sum(y_pred[mask] == 1)
+        precision = true_positives / total_predicted if total_predicted > 0 else 0.0
+        group_precision[group] = precision
+    return group_precision
+
+def calculate_multiclass_fairness_metrics(sensitive_attr, y_true, y_pred):
+
+    unique_groups = np.unique(sensitive_attr)
+    group_tpr = {}
+    group_fpr = {}
+    group_precision = {}
+    for group in unique_groups:
+        mask = (sensitive_attr == group)
+        y_true_group = y_true[mask]
+        y_pred_group = y_pred[mask]
+        tpr, fpr = calculate_tpr_and_fpr(y_true_group, y_pred_group)
+        group_tpr[group] = tpr
+        group_fpr[group] = fpr
+        tp = np.sum((y_true_group == 1) & (y_pred_group == 1))
+        total_pred = np.sum(y_pred_group == 1)
+        prec = tp / total_pred if total_pred > 0 else 0.0
+        group_precision[group] = prec
+
+    equalized_odds = calculate_equalized_odds_difference(group_tpr, group_fpr)
+    equal_opportunity_diff = np.max(list(group_tpr.values())) - np.min(list(group_tpr.values())) if len(group_tpr) > 0 else 0.0
+
+    return {
+        'group_tpr': group_tpr,
+        'group_fpr': group_fpr,
+        'group_precision': group_precision,
+        'equalized_odds': equalized_odds,
+        'equal_opportunity_diff': equal_opportunity_diff
+    }
 
 
 def compute_eddi(sensitive_attr, true_labels, pred_labels, threshold=0.5):
@@ -43,7 +109,6 @@ def print_subgroup_eddi(true_labels, pred_labels, sensitive_name, sensitive_valu
         print(f"  Subgroup {group}: EDDI = {disparity:.4f}")
     return subgroup_eddi, overall_eddi
 
-
 class BEHRTModel_Lab(nn.Module):
     def __init__(self, lab_token_count, hidden_size=768, nhead=8, num_layers=2):
         super(BEHRTModel_Lab, self).__init__()
@@ -55,15 +120,14 @@ class BEHRTModel_Lab(nn.Module):
 
     def forward(self, lab_features):
         # lab_features: (batch, lab_token_count)
-        x = lab_features.unsqueeze(-1)  # (batch, lab_token_count, 1)
-        x = self.token_embedding(x)       # (batch, lab_token_count, hidden_size)
+        x = lab_features.unsqueeze(-1)           
+        x = self.token_embedding(x)              
         x = x + self.pos_embedding.unsqueeze(0)
-        x = x.permute(1, 0, 2)            # (lab_token_count, batch, hidden_size)
+        x = x.permute(1, 0, 2)                      
         x = self.transformer_encoder(x)
-        x = x.permute(1, 0, 2)            # (batch, lab_token_count, hidden_size)
-        lab_embedding = x.mean(dim=1)     # (batch, hidden_size)
+        x = x.permute(1, 0, 2)                      
+        lab_embedding = x.mean(dim=1)              
         return lab_embedding
-
 
 class BEHRTModel_Combined(nn.Module):
     def __init__(self, lab_token_count, hidden_size=768):
@@ -86,13 +150,6 @@ class BEHRTModel_Combined(nn.Module):
 
 
 class FinalStructuredDataset(Dataset):
-    """
-    Dataset for structured data from final_structured_common.csv.
-    Expected columns:
-      - Lab features: columns starting with 'lab_t' (e.g., lab_t0, lab_t2, …)
-      - Demographic features: 'age', 'gender', 'ethnicity_category', 'insurance_category'
-      - Outcome labels: 'short_term_mortality', 'los_binary', 'mechanical_ventilation'
-    """
     def __init__(self, csv_file):
         self.df = pd.read_csv(csv_file)
         self.df.fillna(0, inplace=True)
@@ -120,7 +177,7 @@ class FinalStructuredDataset(Dataset):
     def __getitem__(self, idx):
         row = self.df.iloc[idx]
         lab_features = torch.tensor(row[self.lab_cols].values.astype(np.float32))
-        # The demographic features are no longer used by the model but kept here in case needed for analysis.
+        # The demographic features are kept here for further analysis even and not used for training.
         age = torch.tensor(row['age_int'], dtype=torch.long)
         gender = torch.tensor(row['gender_code'], dtype=torch.long)
         ethnicity = torch.tensor(row['ethnicity_code'], dtype=torch.long)
@@ -129,7 +186,6 @@ class FinalStructuredDataset(Dataset):
                                row['los_binary'],
                                row['mechanical_ventilation']], dtype=torch.float32)
         return lab_features, age, gender, ethnicity, insurance, labels
-
 
 def compute_class_weights(loader):
     all_labels = []
@@ -177,7 +233,6 @@ def train_model(model, train_loader, val_loader, device, num_epochs=50, patience
             train_losses.append(loss.item())
         avg_train_loss = np.mean(train_losses) if train_losses else float('inf')
         
-        # Validation pass: accumulate logits, predictions, and true labels.
         model.eval()
         val_losses = []
         val_logits = {'mortality': [], 'los': [], 'mech': []}
@@ -207,7 +262,6 @@ def train_model(model, train_loader, val_loader, device, num_epochs=50, patience
         avg_val_loss = np.mean(val_losses) if val_losses else float('inf')
         scheduler.step(avg_val_loss)
         
-        # Concatenate validation outputs.
         for key in val_logits:
             val_logits[key] = np.concatenate(val_logits[key], axis=0)
         for key in val_preds:
@@ -308,9 +362,6 @@ def get_model_predictions(model, dataloader, device, threshold=0.5):
         all_predictions[key] = np.concatenate(all_predictions[key], axis=0)
     return all_predictions['mortality'], all_predictions['los'], all_predictions['mech'], all_labels
 
-from iterstrat.ml_stratifiers import MultilabelStratifiedShuffleSplit
-from torch.utils.data import Subset
-
 def main():
     torch.manual_seed(42)
     np.random.seed(42)
@@ -335,7 +386,6 @@ def main():
         train_idx = np.array(train_val_idx)[train_idx_rel]
         val_idx = np.array(train_val_idx)[val_idx_rel]
 
-    # Create dataset subsets.
     train_dataset = Subset(dataset, train_idx)
     val_dataset = Subset(dataset, val_idx)
     test_dataset = Subset(dataset, test_idx)
@@ -347,22 +397,20 @@ def main():
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
-    # Read CSV to extract sensitive attributes.
-    df = pd.read_csv(csv_file)
-    if 'age_group' not in df.columns:
+    df_sensitive = pd.read_csv(csv_file)
+    if 'age_group' not in df_sensitive.columns:
         age_bins = [15, 30, 50, 70, 90]
         age_labels = ['15-29', '30-49', '50-69', '70-89']
-        df['age_group'] = pd.cut(df['age'], bins=age_bins, labels=age_labels, right=False).astype(str)
-    if 'categorized_ethnicity' in df.columns:
-        ethnicity_groups = df['categorized_ethnicity'].values
+        df_sensitive['age_group'] = pd.cut(df_sensitive['age'], bins=age_bins, labels=age_labels, right=False).astype(str)
+    if 'categorized_ethnicity' in df_sensitive.columns:
+        ethnicity_groups = df_sensitive['categorized_ethnicity'].values
     else:
-        ethnicity_groups = df['ethnicity_category'].values
-    if 'insurance_category' in df.columns:
-        insurance_groups = df['insurance_category'].values
+        ethnicity_groups = df_sensitive['ethnicity_category'].values
+    if 'insurance_category' in df_sensitive.columns:
+        insurance_groups = df_sensitive['insurance_category'].values
     else:
-        insurance_groups = df['INSURANCE'].values
+        insurance_groups = df_sensitive['INSURANCE'].values
     
-    # In this version, only lab features are used, so demo vocab sizes are not applicable.
     print("Demo vocab sizes removed since BEHRT demo is no longer used.")
     
     model = BEHRTModel_Combined(len(dataset.lab_cols), hidden_size=768)
@@ -380,13 +428,9 @@ def main():
     
     preds_mort, preds_los, preds_mech, labels_arr = get_model_predictions(model, test_loader, device, threshold=0.5)
     
-    # For fairness evaluation, extract sensitive attributes for test samples.
     test_indices = test_dataset.indices if hasattr(test_dataset, 'indices') else list(range(len(dataset)))[-len(test_loader.dataset):]
-    df_sensitive = pd.read_csv(csv_file)
-    if 'age_group' not in df_sensitive.columns:
-        age_bins = [15, 30, 50, 70, 90]
-        age_labels = ['15-29', '30-49', '50-69', '70-89']
-        df_sensitive['age_group'] = pd.cut(df_sensitive['age'], bins=age_bins, labels=age_labels, right=False).astype(str)
+    
+    test_sensitive_age = df_sensitive.iloc[test_indices]['age_group'].values
     if 'categorized_ethnicity' in df_sensitive.columns:
         test_sensitive_ethnicity = df_sensitive.iloc[test_indices]['categorized_ethnicity'].values
     else:
@@ -395,8 +439,6 @@ def main():
         test_sensitive_insurance = df_sensitive.iloc[test_indices]['insurance_category'].values
     else:
         test_sensitive_insurance = df_sensitive.iloc[test_indices]['INSURANCE'].values
-
-    test_sensitive_age = df_sensitive.iloc[test_indices]['age_group'].values
 
     print("\n--- EDDI Evaluation for Mortality Outcome ---")
     print("Age Groups:")
@@ -427,6 +469,30 @@ def main():
     _, ins_overall_mech = print_subgroup_eddi(labels_arr[:, 2], preds_mech, "Insurance Groups", test_sensitive_insurance)
     overall_eddi_mech = compute_attribute_eddi(age_overall_mech, eth_overall_mech, ins_overall_mech)
     print(f"Combined Overall EDDI for Mechanical Ventilation: {overall_eddi_mech:.4f}\n")
+
+    print("\n--- New Fairness Metrics Evaluation ---")
+    outcomes = {
+        'Mortality': (labels_arr[:, 0], preds_mort),
+        'LOS': (labels_arr[:, 1], preds_los),
+        'Mechanical Ventilation': (labels_arr[:, 2], preds_mech)
+    }
+    sensitive_attributes = {
+        'Age Groups': test_sensitive_age,
+        'Ethnicity Groups': test_sensitive_ethnicity,
+        'Insurance Groups': test_sensitive_insurance
+    }
+    
+    combined_eo = {}
+    for outcome_name, (y_true, y_pred) in outcomes.items():
+        print(f"\nOutcome: {outcome_name}")
+        for sens_name, sens_values in sensitive_attributes.items():
+            print(f"\nSensitive Attribute: {sens_name}")
+            metrics_dict = calculate_multiclass_fairness_metrics(sens_values, y_true, y_pred)
+            eo_metric = metrics_dict['equalized_odds']['EO']
+            print(f"Equalized Odds (EO) metric: {eo_metric:.4f}")
+            combined_eo.setdefault(outcome_name, []).append(eo_metric)
+        overall_eo = np.mean(combined_eo[outcome_name])
+        print(f"\nCombined Equalized Odds Metric for {outcome_name}: {overall_eo:.4f}")
 
 if __name__ == "__main__":
     main()
