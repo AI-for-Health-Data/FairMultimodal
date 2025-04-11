@@ -1,16 +1,9 @@
 import os
 import sys
-# Remove current directory from sys.path to avoid conflicts with local modules.
-current_dir = os.getcwd()
-if current_dir in sys.path:
-    sys.path.remove(current_dir)
-
-import os
-import sys
 import time
 import random
 import argparse
-import datetime  # <-- For timestamping
+import datetime 
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
@@ -61,12 +54,9 @@ def compute_class_weights(df, label_column):
 def compute_eddi(y_true, y_pred, sensitive_labels, threshold=0.5, complete_groups=None):
     y_pred_bin = (y_pred > threshold).astype(int)
     
-    # Determine groups to check: either from complete_groups or the unique groups in the sensitive labels.
     groups = np.array(complete_groups) if complete_groups is not None else np.unique(sensitive_labels)
     
-    # Compute overall error rate of the entire dataset.
     overall_error = np.mean(y_pred_bin != y_true)
-    # Protect against degenerate cases: if overall_error is 0 or 1, we use 1.0 as the denominator.
     denom = overall_error if overall_error not in [0, 1] else 1.0
     if overall_error < 0.5:
         denom = 1 - overall_error
@@ -76,7 +66,6 @@ def compute_eddi(y_true, y_pred, sensitive_labels, threshold=0.5, complete_group
     subgroup_eddi = {}
     valid_groups_count = 0  # Count of groups with at least one sample.
     
-    # Compute the EDDI for each subgroup that has samples.
     for group in groups:
         mask = (sensitive_labels == group)
         if np.sum(mask) == 0:
@@ -85,7 +74,6 @@ def compute_eddi(y_true, y_pred, sensitive_labels, threshold=0.5, complete_group
         er_group = np.mean(y_pred_bin[mask] != y_true[mask])
         subgroup_eddi[group] = (er_group - overall_error) / denom
 
-    # Compute RMS over subgroups with samples.
     if valid_groups_count > 0:
         overall_eddi = np.sqrt(np.sum(np.array(list(subgroup_eddi.values())) ** 2)) / valid_groups_count
     else:
@@ -93,11 +81,7 @@ def compute_eddi(y_true, y_pred, sensitive_labels, threshold=0.5, complete_group
 
     return overall_eddi, subgroup_eddi
 
-# Additional Fairness Metric Functions
 def calculate_tpr_and_fpr(y_true, y_pred, group_mask):
-    """
-    Calculate True Positive Rate (TPR) and False Positive Rate (FPR) for a given group.
-    """
     cm = confusion_matrix(y_true[group_mask], y_pred[group_mask], labels=[1, 0])
     if np.prod(cm.shape) != 4:
         TP = np.sum((y_true[group_mask] == 1) & (y_pred[group_mask] == 1))
@@ -113,7 +97,6 @@ def calculate_tpr_and_fpr(y_true, y_pred, group_mask):
     return tpr, fpr
 
 def print_fairness_metrics(y_true, y_pred, demographics, sensitive_attr_name):
-
     unique_groups = np.unique(demographics)
     tpr_list = []
     fpr_list = []
@@ -124,7 +107,6 @@ def print_fairness_metrics(y_true, y_pred, demographics, sensitive_attr_name):
         print(f"  Group {group}: TPR = {tpr:.3f}, FPR = {fpr:.3f}")
         tpr_list.append(tpr)
         fpr_list.append(fpr)
-    # Calculate absolute pairwise differences.
     tpr_diffs = []
     fpr_diffs = []
     for i, tpr_i in enumerate(tpr_list):
@@ -133,9 +115,11 @@ def print_fairness_metrics(y_true, y_pred, demographics, sensitive_attr_name):
             fpr_diffs.append(abs(fpr_list[i] - fpr_list[j]))
     avg_tpr_diff = np.mean(tpr_diffs) if tpr_diffs else 0.0
     avg_fpr_diff = np.mean(fpr_diffs) if fpr_diffs else 0.0
+    eo_metric = (avg_tpr_diff + avg_fpr_diff) / 2.0
     print(f"  Average TPR difference across groups: {avg_tpr_diff:.3f}")
-    print(f"  Average FPR difference across groups: {avg_fpr_diff:.3f}\n")
-    return avg_tpr_diff, avg_fpr_diff
+    print(f"  Average FPR difference across groups: {avg_fpr_diff:.3f}")
+    print(f"  EO fairness metric (average of TPR and FPR differences): {eo_metric:.3f}\n")
+    return avg_tpr_diff, avg_fpr_diff, eo_metric
 
 def calculate_predictive_parity(y_true, y_pred, sensitive_attrs):
     unique_groups = np.unique(sensitive_attrs)
@@ -145,7 +129,6 @@ def calculate_predictive_parity(y_true, y_pred, sensitive_attrs):
         precision = precision_score(y_true[group_indices], y_pred[group_indices], zero_division=0, average='weighted')
         precision_scores[group] = precision
     return precision_scores
-
 
 class BioClinicalBERT_FT(nn.Module):
     def __init__(self, base_model, config, device):
@@ -242,13 +225,7 @@ class BEHRTModel_Lab(nn.Module):
 
 class MultimodalTransformer_EDDI_Sigmoid(nn.Module):
     def __init__(self, text_embed_size, behrt_demo, behrt_lab, device, fusion_hidden=512, beta=1.0):
-        """
-        Fusion Process:
-          1. Each modality (demo, lab, text) is projected into a 256-D space.
-          2. The projections are weighted (dynamically updated) and concatenated into a 768-D vector.
-          3. A shared 768-D sigmoid gating vector is applied elementwise.
-          4. The gated representation is fed through an MLP to produce 3 logits.
-        """
+
         super(MultimodalTransformer_EDDI_Sigmoid, self).__init__()
         self.behrt_demo = behrt_demo
         self.behrt_lab = behrt_lab
@@ -275,7 +252,7 @@ class MultimodalTransformer_EDDI_Sigmoid(nn.Module):
         self.sig_weights = nn.Parameter(torch.randn(768))
 
         self.fusion_mlp = nn.Sequential(
-            nn.Linear(768, fusion_hidden),  # Pre-ReLU extraction here.
+            nn.Linear(768, fusion_hidden),  
             nn.ReLU(),
             nn.Dropout(0.1),
             nn.Linear(fusion_hidden, 3)
@@ -336,28 +313,12 @@ class MultimodalTransformer_EDDI_Sigmoid(nn.Module):
         return outputs
 
 def update_dynamic_weights_all_tasks(model, dataloader, device, old_eddi_weights, beta, threshold=0.5):
-    """
-    Compute outcome-specific RMS-based EDDI (using the demo modality predictions)
-    and update dynamic weights for each outcome.
     
-    For each modality (demo, lab, text), we compute the overall EDDI using the RMS of the
-    per-sensitive-attribute EDDI values (age, ethnicity, insurance). Then, the maximum overall
-    EDDI (across the modalities) is used to update each modality weight.
-    
-    The update rule per modality is:
-      new_weight = old_weight + beta * (max_eddi - modality_overall_eddi)
-    
-    The weight updates are clipped to a maximum magnitude (update_limit) and finally normalized
-    so that the weights sum to 1.
-    
-    Expected subgroup codes are passed via complete_groups.
-    """
     outcome_names = ["mortality", "los", "mechanical_ventilation"]
     predictions = {outcome: {"demo": [], "lab": [], "text": []} for outcome in outcome_names}
     labels_all = {outcome: [] for outcome in outcome_names}
     sensitive_attrs = {"age": [], "ethnicity": [], "insurance": []}
 
-    # Collect predictions, labels, and sensitive attributes from each batch.
     with torch.no_grad():
         for batch in dataloader:
             (demo_dummy_ids, demo_attn_mask,
@@ -438,7 +399,7 @@ def update_dynamic_weights_all_tasks(model, dataloader, device, old_eddi_weights
     return new_weights
 
 def train_step(model, dataloader, optimizer, device, criterion, beta=1.0,
-               lambda_edd=1.0, lambda_l1=0.01, target=1.0, threshold=0.5,
+               lambda_edd=0.8, lambda_l1=0.01, target=1.0, threshold=0.5,
                old_eddi_weights=None):
     model.train()
     running_loss = 0.0
@@ -521,11 +482,6 @@ def calibrate_thresholds(model, dataloader, device):
     return thresholds
 
 def evaluate_model_multi(model, dataloader, device, thresholds, print_eddi=False):
-    """
-    Evaluate the model on multiple outcomes and compute fairness metrics.
-    For each outcome, subgroup fairness metrics (TPR, FPR) are computed per sensitive attribute
-    (age, ethnicity, insurance), then the average differences are recorded.
-    """
     model.eval()
     all_logits = []
     all_labels = []
@@ -584,24 +540,23 @@ def evaluate_model_multi(model, dataloader, device, thresholds, print_eddi=False
                             "optimal_threshold": thresh}
         fairness_details[outcome] = {}
         print(f"\nOutcome: {outcome} (Threshold: {thresh:.2f})")
+        eo_metrics_list = []
         for attr_name, dem_values in zip(["age", "ethnicity", "insurance"],
                                          [all_age, all_ethnicity, all_insurance]):
-            print_fairness_metrics(labels_np, preds, dem_values, sensitive_attr_name=attr_name)
-            avg_tpr_diff, avg_fpr_diff = print_fairness_metrics(labels_np, preds, dem_values, sensitive_attr_name=attr_name)
-            fairness_details[outcome][attr_name] = {"avg_tpr_diff": avg_tpr_diff, "avg_fpr_diff": avg_fpr_diff}
-    return metrics, all_logits.numpy(), all_labels.numpy(), all_age, all_ethnicity, all_insurance
+            avg_tpr_diff, avg_fpr_diff, eo_metric = print_fairness_metrics(labels_np, preds, dem_values, sensitive_attr_name=attr_name)
+            fairness_details[outcome][attr_name] = {"avg_tpr_diff": avg_tpr_diff, "avg_fpr_diff": avg_fpr_diff, "eo_metric": eo_metric}
+            eo_metrics_list.append(eo_metric)
+        overall_eo = np.mean(eo_metrics_list)
+        print(f"Overall EO fairness metric for outcome {outcome}: {overall_eo:.3f}")
+        fairness_details[outcome]["overall_eo"] = overall_eo
+    return metrics, all_logits.numpy(), all_labels.numpy(), all_age, all_ethnicity, all_insurance, fairness_details
 
 def evaluate_model(model, dataloader, device, threshold=0.5, old_eddi_weights=None):
-    metrics, logits_all, labels_all, age_all, ethnicity_all, insurance_all = evaluate_model_multi(
+    metrics, logits_all, labels_all, age_all, ethnicity_all, insurance_all, fairness_details = evaluate_model_multi(
         model, dataloader, device, thresholds=threshold, print_eddi=True)
-    return metrics, logits_all, labels_all, age_all, ethnicity_all, insurance_all
+    return metrics, logits_all, labels_all, age_all, ethnicity_all, insurance_all, fairness_details
 
-
-def extract_and_save_vectors(model, dataloader, device, save_path="extracted_vectors1.npz"):
-    """
-    Extracts the gated vector and the fusion pre-ReLU vector for all batches,
-    along with ground truth labels and sensitive attribute arrays, and saves them to a file.
-    """
+def extract_and_save_vectors(model, dataloader, device, save_path="extracted_vectors.npz"):
     model.eval()
     all_gated = []
     all_fusion_pre_relu = []
@@ -914,7 +869,7 @@ def run_experiment(hparams):
     print("\nOptimal thresholds from validation:")
     for outcome, thresh in val_thresholds.items():
         print(f"{outcome}: {thresh:.2f}")
-    final_metrics, logits_all, labels_all, age_all, ethnicity_all, insurance_all = evaluate_model(
+    final_metrics, logits_all, labels_all, age_all, ethnicity_all, insurance_all, fairness_details = evaluate_model(
         multimodal_model, test_loader, device, threshold=val_thresholds)
     print("\n--- Final Evaluation Metrics on Test Set ---")
     for outcome, m in final_metrics.items():
@@ -927,6 +882,7 @@ def run_experiment(hparams):
         print("  TPR       : {:.4f}".format(m["TPR"]))
         print("  FPR       : {:.4f}".format(m["fpr"]))
         print("  Optimal Thresh: {:.2f}".format(m["optimal_threshold"]))
+        print("  Overall EO fairness metric: {:.3f}".format(fairness_details[outcome]["overall_eo"]))
     
     expected_age_codes = [0, 1, 2, 3]
     expected_ethnicity_codes = [0, 1, 2, 3, 4]
@@ -958,12 +914,12 @@ def run_experiment(hparams):
     print("\n--- Overall Combined EDDI across outcomes ---")
     print("Overall Combined EDDI:", overall_combined_eddi)
     
-    np.save("tracked_dynamic_weights_1.0.npy", tracked_dynamic_weights)
-    np.save("tracked_sigmoid_weights_1.0.npy", np.array(tracked_sigmoid_weights))
+    np.save("tracked_dynamic_weights.npy", tracked_dynamic_weights)
+    np.save("tracked_sigmoid_weights.npy", np.array(tracked_sigmoid_weights))
     
 if __name__ == "__main__":
     hyperparameter_grid = [
-        {'lr': 1e-5, 'num_epochs': 50, 'lambda_edd': 1.0, 'lambda_l1': 0.01,
+        {'lr': 1e-5, 'num_epochs': 50, 'lambda_edd': 0.8, 'lambda_l1': 0.01,
          'batch_size': 16, 'threshold': 0.50, 'weight_decay': 0.01, 'beta': 1.0},
     ]
     results = {}
