@@ -1,6 +1,3 @@
-#!/usr/bin/env python
-# coding: utf-8
-
 import pandas as pd
 import re
 
@@ -104,7 +101,6 @@ first_icu['insurance_group'] = first_icu['insurance'].apply(bucket_insurance)
 first_icu['age_years'] = first_icu['anchor_age']
 
 # PE & PH FLAGS 
-
 # normalize ICD code column and flag
 diagnoses['code'] = diagnoses['icd_code'].str.replace('.', '', regex=False).fillna('')
 diagnoses['pe']   = diagnoses['code'].str.startswith('415').astype(int)
