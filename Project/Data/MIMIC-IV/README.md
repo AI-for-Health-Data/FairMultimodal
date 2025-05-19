@@ -2,25 +2,25 @@
 
 * **First 24-h Structured Dataset**
 
-  * Shape: (65366, 5031)
-  * Short-term Mortality Positives: 4780
-  * PE Positives: 876
-  * PH Positives: 2036
+  * Shape: (44573, 4897)
+  * Short-term Mortality Positives: 3394
+  * PE Positives: 626
+  * PH Positives: 1514
 
 * **First 24-h Unstructured Chunks Dataset**
 
-  * Shape: (65366, 14)
-  * Short-term Mortality Positives: 4780
-  * PE Positives: 876
-  * PH Positives: 2036
+  * Shape: (44573, 788)
+  * Short-term Mortality Positives: 3394
+  * PE Positives: 626
+  * PH Positives: 1514
 
 * **Last 24-h Structured Readmission Dataset**
 
-  * Shape: (62712, 790)
-  * Readmission Positives (30d): 7521
+  * Shape: (48145, 4065)
+  * Readmission Positives (30d): 4768
 
 * **Last 24-h Unstructured Notes Dataset**
 
-  * Shape: (62712, 7)
-  * Readmission Positives (30d): 7521
+  * Shape: (48145, 39)
+  * Readmission Positives (30d): 4768
 
