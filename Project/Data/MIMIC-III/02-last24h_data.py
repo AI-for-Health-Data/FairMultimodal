@@ -247,3 +247,9 @@ notes_common.to_csv('cohort_unstructured_common_subjects.csv', index=False)
 print(f"Common stays: {df_common.shape[0]}")
 print(f"Structured readmissions:   {df_common['readmit_30d'].sum()}")
 print(f"Unstructured readmissions: {notes_common['readmit_30d'].sum()}")
+
+print("Structured common-subjects shape:", df_common.shape)
+print("Unstructured common-subjects shape:", notes_common.shape)
+
+df_common.to_csv('cohort_structured_common_subjects.csv', index=False)
+notes_common.to_csv('cohort_unstructured_common_subjects.csv', index=False)
