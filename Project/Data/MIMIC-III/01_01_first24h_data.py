@@ -78,7 +78,6 @@ df['mortality'] = df['DEATHTIME'].notnull().astype(int)
 
 diag = pd.read_csv('DIAGNOSES_ICD.csv.gz', compression='gzip', usecols=['SUBJECT_ID','HADM_ID','ICD9_CODE'])
 diag['code'] = diag['ICD9_CODE'].str.split('.').str[0]
-# map flags
 diag['PE'] = diag['code'].isin(['4151','41511','41512','41513']).astype(int)
 diag['PH'] = diag['code'].isin(['416','4160','4161','4162','4168','4169']).astype(int)
 label_pe = diag.groupby(['SUBJECT_ID','HADM_ID'])['PE'].max().reset_index().rename(columns={'SUBJECT_ID':'subject_id','HADM_ID':'hadm_id'})
@@ -132,18 +131,24 @@ def bert_chunks(text):
     return [' '.join(chunk) for chunk in chunks]
 chunks_df = agg_text['TEXT'].apply(lambda x: pd.Series(bert_chunks(x))).add_prefix('note_chunk_')
 df_unstruct = pd.concat([agg_text[['subject_id','hadm_id']], chunks_df], axis=1)
-# merge demographics/outcomes
 df_unstruct = df_unstruct.merge(df_struct[['subject_id','age_bucket','ethnicity','race','insurance','gender','mortality','PE','PH']], on='subject_id', how='left')
+
 
 common = set(df_struct['subject_id']).intersection(df_unstruct['subject_id'])
 final_struct   = df_struct[df_struct['subject_id'].isin(common)].reset_index(drop=True)
 final_unstruct = df_unstruct[df_unstruct['subject_id'].isin(common)].reset_index(drop=True)
 
+print(">>> Structured columns:", final_struct.columns.tolist())
+print(">>> Unstructured columns:", final_unstruct.columns.tolist())
+
 final_struct.to_csv('final_structured.csv', index=False)
 final_unstruct.to_csv('final_unstructured.csv', index=False)
 
-print('Structured shape:', final_struct.shape)
-print('Unstructured shape:', final_unstruct.shape)
-for c in ['mortality','PE','PH']:
-    print(f"{c} positives: {int(final_struct[c].sum())}")
-print('Done.')
+print("Structured data:", final_struct.shape)
+print("Unstructured data:", final_unstruct.shape)
+
+for df_name, df_ in [("Structured", final_struct), ("Unstructured", final_unstruct)]:
+    print(f"\n{df_name} data positive counts:")
+    print("  mortality:",    df_['mortality'].sum())
+    print("  PE:",           df_['PE'].sum())
+    print("  PH:",           df_['PH'].sum())
