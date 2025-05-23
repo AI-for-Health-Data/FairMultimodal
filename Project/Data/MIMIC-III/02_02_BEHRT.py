@@ -1,151 +1,239 @@
-import os
+from __future__ import annotations
+print(" BEHRT-readmit – code loaded")
+
+import math, warnings, re
+from pathlib import Path
 import numpy as np
 import pandas as pd
-import torch
-import torch.nn as nn
+import torch, torch.nn as nn
+from torch.utils.data import Dataset, DataLoader, Subset
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import ReduceLROnPlateau
-from torch.utils.data import Dataset, DataLoader, Subset
-from sklearn.metrics import roc_auc_score, average_precision_score
-from itertools import combinations
+from sklearn.model_selection import StratifiedShuffleSplit
+from sklearn.metrics import (roc_auc_score, precision_recall_curve, auc,
+                             precision_score, recall_score, f1_score)
+from scipy.special import expit
 
-def compute_eddi(groups, true_labels, pred_probs, threshold=0.5):
-    y_pred = (pred_probs > threshold).astype(int)
-    err_overall = np.mean(y_pred != true_labels)
-    denom = max(err_overall, 1 - err_overall) or 1.0
-    subgroup = {}
-    for g in np.unique(groups):
-        mask = (groups == g)
-        if mask.sum() == 0:
-            subgroup[g] = np.nan
-        else:
-            err_g = np.mean(y_pred[mask] != true_labels[mask])
-            subgroup[g] = (err_g - err_overall) / denom
-    overall = np.sqrt(np.nansum(np.array(list(subgroup.values()))**2)) / len(subgroup)
-    return overall, subgroup
+BATCH_SIZE     = 16
+MAX_EPOCHS     = 50
+EARLY_PATIENCE = 5
+LEARNING_RATE  = 2e-5
+WEIGHT_DECAY   = 1e-2
+RUN_FAIRNESS   = True            
 
-def compute_eo(groups, true_labels, pred_probs, threshold=0.5):
-    y_pred = (pred_probs > threshold).astype(int)
-    tprs, fprs = {}, {}
-    for g in np.unique(groups):
-        mask = (groups == g)
-        tp = np.sum((true_labels[mask]==1) & (y_pred[mask]==1))
-        fn = np.sum((true_labels[mask]==1) & (y_pred[mask]==0))
-        tn = np.sum((true_labels[mask]==0) & (y_pred[mask]==0))
-        fp = np.sum((true_labels[mask]==0) & (y_pred[mask]==1))
-        tprs[g] = tp/(tp+fn) if (tp+fn)>0 else 0.0
-        fprs[g] = fp/(fp+tn) if (fp+tn)>0 else 0.0
-    diffs = []
-    for g1, g2 in combinations(tprs.keys(), 2):
-        diffs.append(abs(tprs[g1] - tprs[g2]))
-        diffs.append(abs(fprs[g1] - fprs[g2]))
-    return np.mean(diffs) if diffs else 0.0
+def _tpr_fpr(y_true, y_pred):
+    tp = ((y_true == 1) & (y_pred == 1)).sum()
+    tn = ((y_true == 0) & (y_pred == 0)).sum()
+    fp = ((y_true == 0) & (y_pred == 1)).sum()
+    fn = ((y_true == 1) & (y_pred == 0)).sum()
+    return (tp / (tp + fn) if tp + fn else 0.0,
+            fp / (fp + tn) if fp + tn else 0.0)
 
+def equalised_odds_gap(attr, y_true, y_pred):
+    tpr_d, fpr_d = {}, {}
+    for g in np.unique(attr):
+        m = attr == g
+        tpr_d[g], fpr_d[g] = _tpr_fpr(y_true[m], y_pred[m])
+    groups, n = list(tpr_d), len(tpr_d)
+    if n < 2:
+        return 0.0
+    t_gap = sum(abs(tpr_d[g1] - tpr_d[g2])
+                for i, g1 in enumerate(groups) for g2 in groups[i + 1:])
+    f_gap = sum(abs(fpr_d[g1] - fpr_d[g2])
+                for i, g1 in enumerate(groups) for g2 in groups[i + 1:])
+    return (t_gap + f_gap) / (n ** 2)
 
-df = pd.read_csv('cohort_structured_common_subjects.csv')
-if 'readmit_30d' not in df: raise KeyError("Missing readmit_30d")
-for col in ['age','ethnicity','insurance','race']: df[col] = df.get(col, 'Unknown')
-def bucket_age(x):
-    x = float(x) if str(x).isdigit() else 0
-    return '18-29' if x<30 else '30-49' if x<50 else '50-69' if x<70 else '70-90' if x<=90 else 'Other'
-def derive_race(e):
-    e=e.upper()
-    return 'White' if 'WHITE' in e else 'Black' if 'BLACK' in e else 'Asian' if 'ASIAN'in e else 'Hispanic' if 'HISPANIC'in e else 'Other'
-df['age_bucket']=df['age'].apply(bucket_age)
-df['race']=df['race'].apply(derive_race)
-for col in ['ethnicity','insurance']: df[col]=df[col].fillna('Unknown')
-# One-hot demographics
-demo_df = pd.get_dummies(df[['age_bucket','ethnicity','race','insurance']], drop_first=True)
-# Labels
-y = df['readmit_30d'].values
-# Normalize labs
-lab_cols=[c for c in df.columns if c.startswith('lab_')]
-for c in lab_cols:
-    m,s=df[c].mean(),df[c].std() or 1
-    df[c]=(df[c]-m)/s
-    df[c]=df[c].fillna(0)
+def eddi(attr, y_true, y_score, thr=0.5):
+    y_pred = (y_score > thr).astype(int)
+    err_all = np.mean(y_pred != y_true)
+    denom   = max(err_all, 1 - err_all) if err_all not in (0, 1) else 1.0
+    sub = {}
+    for g in np.unique(attr):
+        m = attr == g
+        err_g = np.mean(y_pred[m] != y_true[m]) if m.any() else np.nan
+        sub[g] = (err_g - err_all) / denom
+    overall = np.sqrt(np.nanmean(np.square(list(sub.values()))))
+    return overall, sub
 
-X_struct=df[lab_cols].values
-X_demo=demo_df.values
-
-class ReadmitDataset(Dataset):
-    def __init__(self,X1,X2,y,sens):
-        self.X1=torch.tensor(X1,dtype=torch.float32)
-        self.X2=torch.tensor(X2,dtype=torch.float32)
-        self.y=torch.tensor(y,dtype=torch.float32)
-        self.sens=sens
-    def __len__(self): return len(self.y)
-    def __getitem__(self,i): return self.X1[i],self.X2[i],self.y[i],self.sens[0][i],self.sens[1][i],self.sens[2][i],self.sens[3][i]
-N=len(y); idx=np.arange(N); np.random.seed(42); np.random.shuffle(idx)
-tr,vl,te=int(0.7*N),int(0.85*N),N
-sens=(df['age_bucket'].values,df['ethnicity'].values,df['race'].values,df['insurance'].values)
-full=ReadmitDataset(X_struct,X_demo,y,sens)
-ds={'train':Subset(full,idx[:tr]),'val':Subset(full,idx[tr:vl]),'test':Subset(full,idx[vl:])}
-ldr={k:DataLoader(v,batch_size=32,shuffle=k=='train') for k,v in ds.items()}
-
-class LabEncoder(nn.Module):
-    def __init__(self,T,H=256):
-        super().__init__(); self.tok=nn.Linear(1,H); self.pos=nn.Parameter(torch.randn(T,H))
-        lay=nn.TransformerEncoderLayer(d_model=H,nhead=8,dropout=0.1)
-        self.enc=nn.TransformerEncoder(lay,num_layers=4)
-    def forward(self,x):h=self.tok(x.unsqueeze(-1))+self.pos.unsqueeze(0);h=h.permute(1,0,2);h=self.enc(h).permute(1,0,2);return h.mean(1)
-
-class ReadmitModel(nn.Module):
-    def __init__(self,T,H,dem_dim):
+class Encoder(nn.Module):
+    def __init__(self, seq_len: int, d_model: int = 768, heads: int = 8, layers: int = 2):
         super().__init__()
-        self.lab_enc=LabEncoder(T,H)
-        self.demo_fc=nn.Linear(dem_dim,H)
-        self.fc=nn.Sequential(nn.Linear(H*2,512),nn.ReLU(),nn.Dropout(0.2),nn.Linear(512,1))
-    def forward(self,x_lab,x_demo):
-        e1=self.lab_enc(x_lab)
-        e2=self.demo_fc(x_demo)
-        z=torch.cat([e1,e2],dim=1)
-        return self.fc(z).squeeze(-1)
+        self.tok = nn.Linear(1, d_model)
+        self.pos = nn.Parameter(torch.randn(seq_len, d_model))
+        block    = nn.TransformerEncoderLayer(d_model, heads, dropout=0.1, batch_first=True)
+        self.enc = nn.TransformerEncoder(block, layers)
 
-device=torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-model=ReadmitModel(len(lab_cols),256,X_demo.shape[1]).to(device)
-opt=AdamW(model.parameters(),lr=5e-5,weight_decay=0.01)
-sched=ReduceLROnPlateau(opt,mode='min',patience=3,factor=0.5)
-# weighted BCE
-pw=(y==0).sum()/(y==1).sum()
-crit=nn.BCEWithLogitsLoss(pos_weight=torch.tensor(pw,device=device))
+    def forward(self, x):                 
+        h = self.tok(x.unsqueeze(-1)) + self.pos
+        return self.enc(h).mean(1)        
 
-best=1e9;cnt=0
-for ep in range(1,31):
-    model.train();tr_losses=[]
-    for xl,xd,yb,_,_,_,_ in ldr['train']:
-        xl,xd,yb=xl.to(device),xd.to(device),yb.to(device)
-        opt.zero_grad();loss=crit(model(xl,xd),yb);loss.backward();opt.step();tr_losses.append(loss.item())
-    model.eval();vlosses=[];allp,allt=[],[]
+class BEHRTReadmit(nn.Module):
+    def __init__(self, seq_len: int):
+        super().__init__()
+        self.backbone = Encoder(seq_len)
+        self.head = nn.Sequential(
+            nn.Linear(768, 768), nn.Dropout(0.1), nn.GELU(),
+            nn.Linear(768, 1)
+        )
+
+    def forward(self, x):                 
+        return self.head(self.backbone(x)).squeeze(1)
+
+TOKEN_PATTERN  = re.compile(r'^(lab|chartevents)_t\d+$')
+SENS_COLS      = ('age_bucket', 'ethnicity_flag', 'race',
+                  'insurance_cat', 'gender')
+
+class StructDS(Dataset):
+    def __init__(self, csv_path: str | Path):
+        df = pd.read_csv(csv_path)
+        df.columns = df.columns.str.lower()
+
+        self.token_cols = [c for c in df.columns if TOKEN_PATTERN.match(c)]
+        if not self.token_cols:
+            raise ValueError("No lab_t*/chartevents_t* columns found.")
+
+        df[self.token_cols] = (
+            df[self.token_cols]
+              .apply(lambda s: (s - s.mean()) / s.std() if s.std() else 0.)
+              .replace([np.inf, -np.inf], np.nan)
+              .fillna(0.)
+              .astype(np.float32)
+        )
+
+        if 'readmit_30d' not in df.columns:
+            raise ValueError("'readmit_30d' column missing.")
+        self.y = df['readmit_30d'].astype(np.float32).values
+
+        self.X = df[self.token_cols].values.astype(np.float32)
+
+        self.sens = {c: df[c].astype(str).values
+                     for c in SENS_COLS if c in df.columns}
+
+    def __len__(self):           return len(self.y)
+    def __getitem__(self, idx):
+        return torch.from_numpy(self.X[idx]), torch.tensor(self.y[idx])
+
+def class_weight(y):
+    pos, neg = (y == 1).sum(), (y == 0).sum()
+    return neg / pos if pos else 1.0
+
+def train(model, tr_loader, val_loader, device):
+    opt   = AdamW(model.parameters(), lr=LEARNING_RATE,
+                  weight_decay=WEIGHT_DECAY)
+    sched = ReduceLROnPlateau(opt, 'min', factor=0.1, patience=2,
+                              verbose=False)
+
+    y_all = torch.cat([y for _, y in tr_loader])
+    loss_f = nn.BCEWithLogitsLoss(
+        pos_weight=torch.tensor(class_weight(y_all.numpy()), device=device)
+    )
+
+    best, wait = math.inf, 0
+    for ep in range(1, MAX_EPOCHS + 1):
+        model.train(); tr_losses = []
+        for x, y in tr_loader:
+            x, y = x.to(device), y.to(device)
+            opt.zero_grad()
+            loss = loss_f(model(x), y)
+            if torch.isnan(loss):                       
+                continue
+            loss.backward()
+            nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            opt.step()
+            tr_losses.append(loss.item())
+        tr_loss = float(np.mean(tr_losses)) if tr_losses else float('nan')
+
+        model.eval(); val_losses = []
+        with torch.no_grad():
+            for x, y in val_loader:
+                loss = loss_f(model(x.to(device)), y.to(device)).item()
+                val_losses.append(loss)
+        val_loss = float(np.mean(val_losses)) if val_losses else float('nan')
+
+        print(f"Epoch {ep:02d} | train {tr_loss:.4f} | val {val_loss:.4f}")
+
+        if math.isnan(val_loss):          
+            print("   ↳ validation loss is NaN – stopping")
+            break
+
+        if val_loss < best:
+            best, wait = val_loss, 0
+            torch.save(model.state_dict(), 'best_behrt_readmit.pt')
+            print("   ↳ best model saved")
+        else:
+            wait += 1
+            if wait >= EARLY_PATIENCE:
+                print("   ↳ early stopping")
+                break
+        sched.step(val_loss)
+
+def evaluate(model, loader, device):
+    model.eval(); logits, labels = [], []
     with torch.no_grad():
-        for xl,xd,yb,_,_,_,_ in ldr['val']:
-            xl,xd,yb=xl.to(device),xd.to(device),yb.to(device)
-            logits=model(xl,xd)
-            vlosses.append(crit(logits,yb).item())
-            p=torch.sigmoid(logits).cpu().numpy();allp.extend(p);allt.extend(yb.cpu().numpy())
-    val_loss=np.mean(vlosses)
-    au=roc_auc_score(allt,allp)
-    ap=average_precision_score(allt,allp)
-    sched.step(val_loss)
-    print(f"Epoch {ep}: train={np.mean(tr_losses):.4f}, val={val_loss:.4f}, AUROC={au:.4f}, AUPRC={ap:.4f}")
-    if val_loss<best:best=val_loss;torch.save(model.state_dict(),"best.pt");cnt=0
-    else:cnt+=1
-    if cnt>=5:print("Early stopping");break
+        for x, y in loader:
+            logits.append(model(x.to(device)).cpu())
+            labels.append(y)
+    logits = torch.cat(logits).numpy()
+    labels = torch.cat(labels).numpy()
+    probs  = expit(logits)
+    preds  = (probs > 0.5).astype(int)
 
-model.load_state_dict(torch.load("best.pt"));model.eval()
-allp,allt=[],[]
-ages_t,eths_t,racs_t,ins_t=[],[],[],[]
-with torch.no_grad():
-    for xl,xd,yb,ag,et,ra,in_ in ldr['test']:
-        xl,xd,yb=xl.to(device),xd.to(device),yb.to(device)
-        p=torch.sigmoid(model(xl,xd)).cpu().numpy()
-        allp.extend(p);allt.extend(yb.cpu().numpy())
-        ages_t.extend(ag);eths_t.extend(et);racs_t.extend(ra);ins_t.extend(in_)
-allp,allt=np.array(allp),np.array(allt)
-print("Test AUROC:",roc_auc_score(allt,allp))
-print("Test AUPRC:",average_precision_score(allt,allp))
-# fairness
-for name,grp in [("Age",ages_t),("Eth",eths_t),("Race",racs_t),("Ins",ins_t)]:
-    eo=compute_eo(np.array(grp),allt,allp)
-    ed,_=compute_eddi(np.array(grp),allt,allp)
-    print(f"{name} EO={eo:.4f}, EDDI={ed:.4f}")
+    pr, rc, _ = precision_recall_curve(labels, logits)
+    return dict(
+        auroc     = roc_auc_score(labels, logits),
+        auprc     = auc(rc, pr),
+        precision = precision_score(labels, preds, zero_division=0),
+        recall    = recall_score(labels, preds),
+        f1        = f1_score(labels, preds)
+    ), logits, labels
+
+def main():
+    torch.manual_seed(42); np.random.seed(42)
+
+    csv = Path("cohort_structured_common_subjects.csv")
+    if not csv.exists():
+        raise SystemExit(f"{csv} not found – run the pre-processing notebook first.")
+    ds = StructDS(csv)
+
+    # 80-10-10 stratified split
+    sss = StratifiedShuffleSplit(1, test_size=0.20, random_state=42)
+    trv_idx, test_idx = next(sss.split(np.zeros(len(ds)), ds.y))
+    sss2 = StratifiedShuffleSplit(1, test_size=0.05/0.80, random_state=42)
+    tr_idx, val_idx = next(sss2.split(np.zeros(len(trv_idx)), ds.y[trv_idx]))
+
+    print(f"Split → train {len(tr_idx)} | val {len(val_idx)} | test {len(test_idx)}")
+
+    mk = lambda ids, sh=False: DataLoader(Subset(ds, ids), batch_size=BATCH_SIZE,
+                                          shuffle=sh, drop_last=False)
+    tr_loader, val_loader, test_loader = mk(tr_idx, True), mk(val_idx), mk(test_idx)
+
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    print("Device:", device)
+
+    model = BEHRTReadmit(seq_len=len(ds.token_cols)).to(device)
+    train(model, tr_loader, val_loader, device)
+    model.load_state_dict(torch.load('best_behrt_readmit.pt',
+                                     map_location=device))
+
+    metrics, logits, labels = evaluate(model, test_loader, device)
+    print("\nTEST METRICS")
+    print("AUROC  AUPRC  F1   Precision  Recall")
+    print("{auroc:.4f} {auprc:.4f} {f1:.4f} {precision:.4f} {recall:.4f}".format(**metrics))
+
+    if RUN_FAIRNESS and ds.sens:
+        probs = expit(logits)
+        preds = (probs > 0.5).astype(int)
+        sens_test = {k: v[test_idx] for k, v in ds.sens.items()}
+
+        print("\nFAIRNESS – Equalised-Odds Δ and EDDI")
+        for col, v in sens_test.items():
+            eo  = equalised_odds_gap(v, labels, preds)
+            edd, sub = eddi(v, labels, probs)
+            print(f"\n▪ {col}")
+            print(f"  ΔEO  : {eo:.4f}")
+            print(f"  EDDI : {edd:.4f}")
+            for g, d in sub.items():
+                print(f"     {g:<12} {d:+.4f}")
+
+if __name__ == "__main__":
+    main()
