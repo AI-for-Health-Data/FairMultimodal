@@ -16,11 +16,11 @@
 
 * **Last 24-h Structured Readmission Dataset**
 
-  * Shape: (48145, 4065)
+  * Shape: (48145, 4069)
   * Readmission Positives (30d): 4768
 
 * **Last 24-h Unstructured Notes Dataset**
 
-  * Shape: (48145, 39)
+  * Shape: (48145, 43)
   * Readmission Positives (30d): 4768
 
