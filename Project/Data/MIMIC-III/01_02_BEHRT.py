@@ -215,7 +215,6 @@ def main():
         for k, v in metrics[outcome].items():
             print(f"  {k:10}: {v:.4f}")
 
-    # --- EDDI for each outcome
     sens_test = {k: v[test_idx] for k, v in ds.sens.items()}
     total_eddis = []
     for i, outcome in enumerate(OUTCOME_COLS):
