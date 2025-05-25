@@ -7,27 +7,25 @@ def calculate_age(dob, intime):
     return intime.year - dob.year - ((intime.month, intime.day) < (dob.month, dob.day))
 
 def categorize_age(age):
-    if 18 <= age <= 29:
-        return '18-29'
-    elif 30 <= age <= 49:
-        return '30-49'
-    elif 50 <= age <= 69:
-        return '50-69'
-    elif 70 <= age <= 90:
-        return '70-90'
-    else:
-        return 'Other'
+    if 18 <= age <= 29: return '18-29'
+    elif 30 <= age <= 49: return '30-49'
+    elif 50 <= age <= 69: return '50-69'
+    elif 70 <= age <= 90: return '70-90'
+    else: return 'Other'
 
 def categorize_ethnicity(eth):
-    eth = str(eth).strip().upper()
-    return 'Hispanic' if 'HISPANIC' in eth else 'Non-Hispanic'
+    eth = str(eth).upper()
+    return 'Hispanic' if 'HISPANIC' in eth or 'LATINO' in eth else 'Non-Hispanic'
 
-def categorize_race(race):
-    r = str(race).upper()
-    if 'WHITE' in r:    return 'White'
-    if 'BLACK' in r:    return 'Black'
-    if 'ASIAN' in r:    return 'Asian'
-    if 'HISPANIC' in r: return 'Hispanic'
+def categorize_race(eth):
+    eth = str(eth).upper()
+    if 'WHITE' in eth: return 'White'
+    if 'BLACK' in eth or 'CARIBBEAN' in eth or 'HAITIAN' in eth or 'CAPE VERDEAN' in eth: return 'Black'
+    if 'ASIAN' in eth: return 'Asian'
+    if 'HISPANIC' in eth or 'LATINO' in eth or 'SOUTH AMERICAN' in eth or 'PORTUGUESE' in eth or 'BRAZILIAN' in eth: return 'Hispanic'
+    if 'AMERICAN INDIAN' in eth or 'NATIVE HAWAIIAN' in eth or 'PACIFIC ISLANDER' in eth: return 'Other'
+    if 'MIDDLE EASTERN' in eth or 'MULTI RACE' in eth: return 'Other'
+    if eth in {'OTHER', 'PATIENT DECLINED TO ANSWER', 'UNABLE TO OBTAIN', 'UNKNOWN/NOT SPECIFIED'}: return 'Other'
     return 'Other'
 
 def categorize_insurance(ins):
@@ -40,132 +38,8 @@ def categorize_insurance(ins):
 def get_readmission_flag_index(df_stays):
     df = df_stays.sort_values(['subject_id','intime']).copy()
     df['next_intime'] = df.groupby('subject_id')['intime'].shift(-1)
-    df['readmit_30d'] = (
-        (df['next_intime'] - df['outtime']) <= pd.Timedelta(days=30)
-    ).fillna(False).astype(int)
+    df['readmit_30d'] = ((df['next_intime'] - df['outtime']) <= pd.Timedelta(days=30)).fillna(False).astype(int)
     return df[['subject_id','hadm_id','icustay_id','readmit_30d']]
-
-def filter_last_24h(df, time_col):
-    df = df.copy()
-    df[time_col] = pd.to_datetime(df[time_col], errors='coerce')
-    df = df.merge(
-        icu_stays[['subject_id','hadm_id','outtime']],
-        on=['subject_id','hadm_id'], how='inner'
-    )
-    df['hours_to_end'] = (df['outtime'] - df[time_col]).dt.total_seconds() / 3600
-    return df[(df['hours_to_end'] >= 0) & (df['hours_to_end'] <= 24)].copy()
-
-def agg_lab(path, bin_size=2):
-    le = pd.read_csv(path, compression='gzip', low_memory=False)
-    le.columns = le.columns.str.lower()
-    le = le[le['valuenum'].notnull()]
-    le = filter_last_24h(le, 'charttime')
-    le['hour_bin'] = (le['hours_to_end'] // bin_size).astype(int)
-
-    agg = (
-        le.groupby(['subject_id','hadm_id','hour_bin','itemid'])['valuenum']
-          .mean()
-          .unstack(fill_value=np.nan)
-          .reset_index()
-    )
-    agg.drop(columns=['hour_bin'], inplace=True)
-
-    cols = ['subject_id','hadm_id'] + [
-        f'lab_t{int(c)}' for c in agg.columns
-        if c not in ['subject_id','hadm_id']
-    ]
-    agg.columns = cols
-    return agg
-
-def agg_feature(table, items, files, bin_size=2, agg_func='mean'):
-    if isinstance(files, list):
-        fe = pd.concat([pd.read_csv(f, compression='gzip', low_memory=False) for f in files],
-                       ignore_index=True)
-    else:
-        fe = pd.read_csv(files, compression='gzip', low_memory=False)
-
-    fe.columns = fe.columns.str.lower()
-    time_cols = [c for c in ['charttime','starttime','eventtime','storetime'] if c in fe.columns]
-    if not time_cols:
-        return pd.DataFrame(columns=['subject_id','hadm_id'])
-
-    fe = filter_last_24h(fe, time_cols[0])
-    if fe.empty:
-        return pd.DataFrame(columns=['subject_id','hadm_id'])
-
-    if 'itemid' in fe.columns:
-        fe = fe[fe['itemid'].isin(items)]
-    if table == 'prescriptions' and 'drug' in fe.columns:
-        fe = fe[fe['drug'].str.lower().isin([i.lower() for i in items])]
-    if fe.empty:
-        return pd.DataFrame(columns=['subject_id','hadm_id'])
-
-    num_cols = [c for c in ['valuenum','value','amount'] if c in fe.columns]
-    val_col = num_cols[0]
-    fe[val_col] = pd.to_numeric(fe[val_col], errors='coerce')
-    fe['hour_bin'] = (fe['hours_to_end'] // bin_size).astype(int)
-
-    grp = fe.groupby(['subject_id','hadm_id','hour_bin'])[val_col]
-    out = grp.sum() if agg_func == 'sum' else grp.mean()
-    agg_df = out.unstack(fill_value=np.nan).reset_index()
-    if 'hour_bin' in agg_df.columns:
-        agg_df.drop(columns=['hour_bin'], inplace=True)
-
-    new_cols = ['subject_id','hadm_id'] + [
-        f'{val_col}_t{int(c)}' for c in agg_df.columns
-        if c not in ['subject_id','hadm_id']
-    ]
-    agg_df.columns = new_cols
-    return agg_df
-
-admissions = (
-    pd.read_csv('ADMISSIONS.csv.gz', compression='gzip', low_memory=False)
-      .rename(columns=str.lower)
-      [['subject_id','hadm_id','ethnicity','insurance']]
-)
-
-patients = (
-    pd.read_csv('PATIENTS.csv.gz', compression='gzip', low_memory=False)
-      .rename(columns=str.lower)
-      [['subject_id','gender','dob']]
-)
-patients['dob'] = pd.to_datetime(patients['dob'], errors='coerce')
-
-icu_stays = (
-    pd.read_csv('ICUSTAYS.csv.gz', compression='gzip', low_memory=False)
-      .rename(columns=str.lower)
-      [['subject_id','hadm_id','icustay_id','intime','outtime']]
-)
-icu_stays['intime']  = pd.to_datetime(icu_stays['intime'],  errors='coerce')
-icu_stays['outtime'] = pd.to_datetime(icu_stays['outtime'], errors='coerce')
-
-admissions['ethnicity_flag'] = admissions['ethnicity'].apply(categorize_ethnicity)
-admissions['race']            = admissions['ethnicity'].apply(categorize_race)
-admissions['insurance_cat']   = admissions['insurance'].apply(categorize_insurance)
-
-df = (
-    icu_stays
-      .merge(admissions[['subject_id','hadm_id','race','ethnicity_flag','insurance_cat']],
-             on=['subject_id','hadm_id'], how='left')
-      .merge(patients[['subject_id','gender','dob']], on='subject_id', how='left')
-)
-
-df['age']        = df.apply(lambda r: calculate_age(r['dob'], r['intime']), axis=1)
-df = df[(df['age'] >= 18) & (df['age'] <= 90)]
-df['age_bucket'] = df['age'].apply(categorize_age)
-df['gender']     = df['gender'].str.lower().apply(
-                      lambda x: 'male' if x.startswith('m')
-                                else ('female' if x.startswith('f') else x)
-                  )
-
-flags = get_readmission_flag_index(icu_stays)
-df = df.merge(
-    flags[['subject_id','icustay_id','readmit_30d']],
-    on=['subject_id','icustay_id'], how='left'
-)
-df['readmit_30d'] = df['readmit_30d'].fillna(0).astype(int)
-
-df = df.sort_values(['subject_id','intime']).groupby('subject_id', as_index=False).first()
 
 feature_set_C_items = {
     'chartevents': [220051,220052,618,220210,224641,220292,535,224695,506,220339,448,224687,224685,220293,444,224697,220074,224688,223834,50815,225664,220059,683,224684,220060,226253,224161,642,225185,226758,226757,226756,220050,211,220045,223761,223835,226873,226871,8364,8555,8368,53,646,1529,50809,50931,51478,224639,763,224639,226707],
@@ -179,17 +53,87 @@ input_files = {
     'labevents':     'LABEVENTS.csv.gz',
     'inputevents':   ['inputevents_cv.csv.gz','inputevents_mv.csv.gz'],
     'outputevents':  'OUTPUTEVENTS.csv.gz',
-    'prescriptions':'PRESCRIPTIONS.csv.gz'
+    'prescriptions': 'PRESCRIPTIONS.csv.gz'
 }
 
-lab_feats = agg_lab(input_files['labevents'])
-df = df.merge(lab_feats, on=['subject_id','hadm_id'], how='left')
+def aggregate_event_features(table, items, files, cohort_df, intime_col, bin_size=2, drug_mode=False):
+    """Aggregate features for specified items/drugs over 2h bins in 0-24h after ICU admission."""
+    if isinstance(files, list):
+        df_all = pd.concat([pd.read_csv(f, compression='gzip', low_memory=False) for f in files], ignore_index=True)
+    else:
+        df_all = pd.read_csv(files, compression='gzip', low_memory=False)
 
-time_cols = [c for c in df.columns if re.match(r'.*_t\d+$', c)]
-df['hours_data_present'] = df[time_cols].notnull().sum(axis=1) * 2
-df = df[df['hours_data_present'] >= 30]
+    df_all.columns = df_all.columns.str.lower()
+    cohort_keys = cohort_df[['subject_id','hadm_id',intime_col]]
+    df_all = df_all.merge(cohort_keys.rename(columns={intime_col:'intime'}), on=['subject_id','hadm_id'], how='inner')
 
-df.to_csv('cohort_structured_first24h_temp.csv', index=False)
+    # Select only target itemids/drugs
+    if drug_mode:
+        df_all = df_all[df_all['drug'].str.lower().isin([d.lower() for d in items])]
+    elif 'itemid' in df_all.columns:
+        df_all = df_all[df_all['itemid'].isin(items)]
+
+    event_col = None
+    for col in ['charttime','starttime','eventtime','storetime']:
+        if col in df_all.columns:
+            event_col = col
+            break
+    if event_col is None: return pd.DataFrame(columns=['subject_id','hadm_id'])
+    df_all[event_col] = pd.to_datetime(df_all[event_col], errors='coerce')
+    df_all['hrs'] = (df_all[event_col] - df_all['intime']).dt.total_seconds()/3600
+    df_all = df_all[(df_all['hrs'] >= 0) & (df_all['hrs'] < 24)]
+    df_all['bin'] = (df_all['hrs']//bin_size).astype(int)
+
+    value_cols = [c for c in ['valuenum','value','amount','rate'] if c in df_all.columns]
+    if not value_cols: return pd.DataFrame(columns=['subject_id','hadm_id'])
+    val_col = value_cols[0]
+    df_all[val_col] = pd.to_numeric(df_all[val_col], errors='coerce')
+
+    idx_cols = ['subject_id','hadm_id','bin','drug'] if drug_mode else ['subject_id','hadm_id','bin','itemid']
+    agg = df_all.groupby(idx_cols)[val_col].mean().reset_index()
+    agg['colname'] = (
+        agg.apply(lambda r: f"{table}_t{r.bin*bin_size}h_drug_{r.drug.lower().replace(' ','_')}" if drug_mode
+        else f"{table}_t{r.bin*bin_size}h_item{r.itemid}", axis=1)
+    )
+    feat = agg.pivot(index=['subject_id','hadm_id'], columns='colname', values=val_col).reset_index()
+    return feat
+
+admissions = pd.read_csv('ADMISSIONS.csv.gz', compression='gzip', low_memory=False).rename(columns=str.lower)
+patients = pd.read_csv('PATIENTS.csv.gz', compression='gzip', low_memory=False).rename(columns=str.lower)
+patients['dob'] = pd.to_datetime(patients['dob'], errors='coerce')
+icu_stays = pd.read_csv('ICUSTAYS.csv.gz', compression='gzip', low_memory=False).rename(columns=str.lower)
+icu_stays['intime']  = pd.to_datetime(icu_stays['intime'],  errors='coerce')
+icu_stays['outtime'] = pd.to_datetime(icu_stays['outtime'], errors='coerce')
+
+admissions['ethnicity_flag'] = admissions['ethnicity'].apply(categorize_ethnicity)
+admissions['race']           = admissions['ethnicity'].apply(categorize_race)
+admissions['insurance_cat']  = admissions['insurance'].apply(categorize_insurance)
+df = (
+    icu_stays
+      .merge(admissions[['subject_id','hadm_id','race','ethnicity_flag','insurance_cat']],
+             on=['subject_id','hadm_id'], how='left')
+      .merge(patients[['subject_id','gender','dob']], on='subject_id', how='left')
+)
+df['age']        = df.apply(lambda r: calculate_age(r['dob'], r['intime']), axis=1)
+df = df[(df['age'] >= 18) & (df['age'] <= 90)]
+df['age_bucket'] = df['age'].apply(categorize_age)
+df['gender']     = df['gender'].str.lower().apply(lambda x: 'male' if x.startswith('m') else ('female' if x.startswith('f') else x))
+
+flags = get_readmission_flag_index(icu_stays)
+df = df.merge(flags[['subject_id','icustay_id','readmit_30d']], on=['subject_id','icustay_id'], how='left')
+df['readmit_30d'] = df['readmit_30d'].fillna(0).astype(int)
+df = df.sort_values(['subject_id','intime']).groupby('subject_id', as_index=False).first()
+
+all_feats = df[['subject_id','hadm_id']].copy()
+for tab in feature_set_C_items:
+    print(f"Processing {tab}...")
+    items = feature_set_C_items[tab]
+    file = input_files[tab]
+    drug_mode = (tab == 'prescriptions')
+    tab_feats = aggregate_event_features(tab, items, file, df, 'intime', bin_size=2, drug_mode=drug_mode)
+    all_feats = all_feats.merge(tab_feats, on=['subject_id','hadm_id'], how='left')
+
+df_struct = df[['subject_id','hadm_id','age_bucket','ethnicity_flag','race','insurance_cat','gender','readmit_30d']].merge(all_feats, on=['subject_id','hadm_id'], how='left')
 
 def preprocess_text(x):
     y = re.sub(r'\[(.*?)\]', '', str(x))
@@ -206,50 +150,44 @@ notes = (
       .rename(columns=str.lower)
       [['subject_id','hadm_id','chartdate','text']]
 )
+notes = notes.merge(df[['subject_id', 'hadm_id']], on=['subject_id', 'hadm_id'], how='inner')
+notes['chartdate'] = pd.to_datetime(notes['chartdate'], errors='coerce')
+notes = notes.merge(df[['subject_id','hadm_id','outtime']], on=['subject_id','hadm_id'], how='left')
+notes['hours_to_end'] = (notes['outtime'] - notes['chartdate']).dt.total_seconds() / 3600
+notes = notes[(notes['hours_to_end'] >= 0) & (notes['hours_to_end'] <= 24)]
+notes['text'] = notes['text'].fillna('')
 
-notes_last24 = filter_last_24h(notes, 'chartdate')
-notes_last24['text'] = notes_last24['text'].fillna('')
-
-notes_agg = (
-    notes_last24
-      .groupby(['subject_id','hadm_id'], as_index=False)['text']
-      .apply(lambda txt: ' '.join(txt))
-)
+notes_agg = notes.groupby(['subject_id','hadm_id'], as_index=False)['text'].apply(lambda txt: ' '.join(txt))
 notes_agg['clean'] = notes_agg['text'].apply(preprocess_text)
+chunked = notes_agg['clean'].apply(lambda x: pd.Series(chunk_text(x)))
+chunked.columns = [f'note_{i}' for i in chunked.columns]
+notes_final = pd.concat([notes_agg[['subject_id','hadm_id']], chunked], axis=1)
 
-chunks = notes_agg['clean'].apply(lambda x: pd.Series(chunk_text(x)))
-notes_final = pd.concat([notes_agg[['subject_id','hadm_id']], chunks], axis=1)
-
+merge_cols = [
+    'subject_id','hadm_id','readmit_30d','age_bucket','gender','race','ethnicity_flag','insurance_cat'
+]
 notes_final = notes_final.merge(
-    df[['subject_id','hadm_id','readmit_30d']],
+    df[merge_cols],
     on=['subject_id','hadm_id'], how='left'
 )
+meta_cols = ['subject_id','hadm_id','readmit_30d','age_bucket','gender','race','ethnicity_flag','insurance_cat']
+note_cols = [c for c in notes_final.columns if c.startswith('note_')]
+notes_final = notes_final[meta_cols + note_cols]
 
-common_pairs = (
-    pd.merge(
-        df[['subject_id','hadm_id']],
-        notes_final[['subject_id','hadm_id']],
-        on=['subject_id','hadm_id']
-    )
-    .drop_duplicates()
-)
-
-df_common   = df.merge(common_pairs,   on=['subject_id','hadm_id'], how='inner')
+common_pairs = pd.merge(df_struct[['subject_id','hadm_id']], notes_final[['subject_id','hadm_id']], on=['subject_id','hadm_id']).drop_duplicates()
+df_common   = df_struct.merge(common_pairs,   on=['subject_id','hadm_id'], how='inner')
 notes_common = notes_final.merge(common_pairs, on=['subject_id','hadm_id'], how='inner')
 
-assert df_common.shape[0] == notes_common.shape[0], (
-    f"Structured has {df_common.shape[0]} rows, unstructured has {notes_common.shape[0]}"
-)
-
 df_common.to_csv('cohort_structured_common_subjects.csv', index=False)
 notes_common.to_csv('cohort_unstructured_common_subjects.csv', index=False)
 
-print(f"Common stays: {df_common.shape[0]}")
-print(f"Structured readmissions:   {df_common['readmit_30d'].sum()}")
-print(f"Unstructured readmissions: {notes_common['readmit_30d'].sum()}")
+print(f"All structured: {df_struct.shape}, positives: {df_struct['readmit_30d'].sum()}")
+print(f"All unstructured: {notes_final.shape}, positives: {notes_final['readmit_30d'].sum()}")
+print(f"Common structured: {df_common.shape}, positives: {df_common['readmit_30d'].sum()}")
+print(f"Common unstructured: {notes_common.shape}, positives: {notes_common['readmit_30d'].sum()}")
 
-print("Structured common-subjects shape:", df_common.shape)
-print("Unstructured common-subjects shape:", notes_common.shape)
-
-df_common.to_csv('cohort_structured_common_subjects.csv', index=False)
-notes_common.to_csv('cohort_unstructured_common_subjects.csv', index=False)
+for col in ['age_bucket', 'ethnicity_flag', 'race', 'insurance_cat', 'gender']:
+    print(f"\nStructured {col} value counts:")
+    print(df_common[col].value_counts())
+    print(f"Unstructured {col} value counts:")
+    print(notes_common[col].value_counts())
