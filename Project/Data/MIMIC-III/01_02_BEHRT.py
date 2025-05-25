@@ -9,6 +9,7 @@ from torch.optim.lr_scheduler import ReduceLROnPlateau
 from sklearn.model_selection import StratifiedShuffleSplit
 from sklearn.metrics import roc_auc_score, precision_recall_curve, auc, precision_score, recall_score, f1_score
 from scipy.special import expit
+from iterstrat.ml_stratifiers import MultilabelStratifiedShuffleSplit
 
 BATCH_SIZE     = 16
 MAX_EPOCHS     = 50
@@ -46,7 +47,7 @@ class StructDS(Dataset):
         df = pd.read_csv(csv_path)
         df.columns = df.columns.str.lower()
         self.sens = {c: df[c].astype(str).values for c in SENS_COLS}
-        self.y = np.vstack([df[o].astype(np.float32).values for o in OUTCOME_COLS]).T  # [N,3]
+        self.y = np.vstack([df[o].astype(np.float32).values for o in OUTCOME_COLS]).T 
         ignore_cols = set(['subject_id', 'hadm_id'] + list(SENS_COLS) + OUTCOME_COLS)
         self.lab_cols = [
             c for c in df.columns
@@ -87,9 +88,14 @@ def class_weight(y):
     return weights
 
 def train(model, tr_loader, val_loader, device, class_weights):
+    # Set custom gamma for each outcome
+    gammas = [2.0, 5.0, 3.0]  # [mortality, PE, PH]
+    loss_fs = [
+        FocalLoss(gamma=gammas[k], pos_weight=torch.tensor(class_weights[k], device=device))
+        for k in range(len(OUTCOME_COLS))
+    ]
     opt = AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY)
     sched = ReduceLROnPlateau(opt, 'min', patience=2, verbose=False)
-    loss_fs = [FocalLoss(gamma=2.0, pos_weight=torch.tensor(w, device=device)) for w in class_weights]
     best, wait = math.inf, 0
     for ep in range(1, MAX_EPOCHS + 1):
         model.train(); tr_losses = []
@@ -122,6 +128,7 @@ def train(model, tr_loader, val_loader, device, class_weights):
             if wait >= EARLY_PATIENCE:
                 print("   ↳ early stopping"); break
         sched.step(val_loss)
+
 
 def evaluate(model, loader, device):
     model.eval()
@@ -177,20 +184,26 @@ def detailed_eddi(y_true, probs, sens_test, sens_cols, outcome_idx, outcome_name
     return total_eddi
 
 def main():
-    torch.manual_seed(42); np.random.seed(42)
+    torch.manual_seed(42)
+    np.random.seed(42)
     csv = Path("final_structured.csv")
     assert csv.exists(), "Data file missing!"
     ds = StructDS(csv)
-    sss = StratifiedShuffleSplit(1, test_size=0.20, random_state=42)
-    trv_idx, test_idx = next(sss.split(np.zeros(len(ds)), ds.y[:, 0]))
-    sss2 = StratifiedShuffleSplit(1, test_size=0.05/0.80, random_state=42)
-    tr_idx, val_idx = next(sss2.split(np.zeros(len(trv_idx)), ds.y[trv_idx, 0]))
+
+    msss = MultilabelStratifiedShuffleSplit(n_splits=1, test_size=0.20, random_state=42)
+    trv_idx, test_idx = next(msss.split(np.zeros(len(ds)), ds.y))
+    msss2 = MultilabelStratifiedShuffleSplit(n_splits=1, test_size=0.05 / 0.80, random_state=42)
+    tr_idx, val_idx = next(msss2.split(np.zeros(len(trv_idx)), ds.y[trv_idx]))
+
     print(f"Split → train {len(tr_idx)} | val {len(val_idx)} | test {len(test_idx)}")
     mk = lambda ids, sh=False: DataLoader(Subset(ds, ids), batch_size=BATCH_SIZE, shuffle=sh, drop_last=False)
-    tr_loader, val_loader, test_loader = mk(tr_idx, True), mk(val_idx), mk(test_idx)
+    tr_loader = mk(tr_idx, True)
+    val_loader = mk(val_idx)
+    test_loader = mk(test_idx)
+
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print("Device:", device)
-    model = BEHRTStruct(seq_len=len(ds.lab_cols), d_model=128).to(device)
+    model = BEHRTStruct(seq_len=len(ds.lab_cols), d_model=768).to(device)
     class_weights = class_weight(ds.y[tr_idx])
     train(model, tr_loader, val_loader, device, class_weights)
     model.load_state_dict(torch.load('best_behrt.pt', map_location=device))
@@ -202,6 +215,7 @@ def main():
         for k, v in metrics[outcome].items():
             print(f"  {k:10}: {v:.4f}")
 
+    # --- EDDI for each outcome
     sens_test = {k: v[test_idx] for k, v in ds.sens.items()}
     total_eddis = []
     for i, outcome in enumerate(OUTCOME_COLS):
