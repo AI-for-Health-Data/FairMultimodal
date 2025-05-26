@@ -1,212 +1,268 @@
-import argparse
 import os
 import numpy as np
 import pandas as pd
+from tqdm import tqdm
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
 from torch.optim import AdamW
-from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.utils.data import Dataset, DataLoader
-
+from transformers import AutoTokenizer, AutoModel
+from sklearn.metrics import roc_auc_score, average_precision_score, f1_score, recall_score, precision_score, confusion_matrix
+from scipy.special import expit  # for logistic sigmoid
 from skmultilearn.model_selection import iterative_train_test_split
-from sklearn.metrics import (
-    roc_auc_score,
-    average_precision_score,
-    f1_score,
-    recall_score,
-    precision_score,
-    confusion_matrix
-)
 
-class FocalLoss(nn.Module):
-    def __init__(self, gamma=2.0, pos_weight=None, reduction='mean'):
+class BioClinicalBERT_FT(nn.Module):
+    def __init__(self, base_model, device):
         super().__init__()
-        self.gamma = gamma
-        self.pos_weight = pos_weight
-        self.reduction = reduction
+        self.bert = base_model
+        self.device = device
 
-    def forward(self, logits, targets):
-        bce = F.binary_cross_entropy_with_logits(
-            logits, targets,
-            reduction='none',
-            pos_weight=self.pos_weight
+    def forward(self, input_ids, attention_mask):
+        outputs = self.bert(input_ids=input_ids, attention_mask=attention_mask)
+        return outputs.last_hidden_state[:, 0, :]  # CLS token
+
+def embed_notes(notes, tokenizer, model, device, max_length=512):
+    embeddings = []
+    for note in notes:
+        if not note or not isinstance(note, str) or note.strip() == "":
+            continue
+        encoded = tokenizer.encode_plus(
+            text=note, add_special_tokens=True, max_length=max_length,
+            padding='max_length', truncation=True, return_attention_mask=True, return_tensors='pt'
         )
-        pt = torch.exp(-bce)
-        loss = ((1 - pt) ** self.gamma) * bce
-        return loss.mean() if self.reduction=='mean' else loss.sum()
+        input_ids = encoded['input_ids'].to(device)
+        attn_mask = encoded['attention_mask'].to(device)
+        with torch.no_grad():
+            emb = model(input_ids, attn_mask)
+        embeddings.append(emb.cpu().numpy())
+    if not embeddings:
+        return np.zeros(model.bert.config.hidden_size)
+    return np.mean(np.vstack(embeddings), axis=0)
+
+def aggregate_note_embeddings(df, note_columns, tokenizer, model, device):
+    patient_embeddings, patient_ids = [], []
+    for idx, row in tqdm(df.iterrows(), total=len(df), desc="Aggregating embeddings"):
+        notes = []
+        for col in note_columns:
+            val = row.get(col, None)
+            if pd.notnull(val) and isinstance(val, str) and val.strip() != "":
+                notes.append(val)
+        emb = embed_notes(notes, tokenizer, model, device)
+        patient_embeddings.append(emb)
+        patient_ids.append(row['subject_id'])
+    return np.stack(patient_embeddings), patient_ids
 
 class UnstructuredDataset(Dataset):
-    def __init__(self, embeddings: np.ndarray, y_mort, y_pe, y_ph):
-        self.X = torch.tensor(np.nan_to_num(embeddings, nan=0.0), dtype=torch.float32)
-        labels = np.vstack([y_mort, y_pe, y_ph]).T
-        self.y = torch.tensor(labels, dtype=torch.float32)
+    def __init__(self, embeddings, labels):
+        self.embeddings = torch.tensor(embeddings, dtype=torch.float32)
+        self.labels = torch.tensor(labels, dtype=torch.float32)
+    def __len__(self): return self.embeddings.size(0)
+    def __getitem__(self, idx): return self.embeddings[idx], self.labels[idx]
 
-    def __len__(self):
-        return len(self.X)
-
-    def __getitem__(self, idx):
-        return self.X[idx], self.y[idx]
-
-class Classifier(nn.Module):
-    def __init__(self, input_dim, hidden_dim=256):
+class UnstructuredClassifier(nn.Module):
+    def __init__(self, input_size=768, hidden_size=256, output_size=3):
         super().__init__()
-        self.body = nn.Sequential(
-            nn.Linear(input_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Dropout(0.1),
+        self.classifier = nn.Sequential(
+            nn.Linear(input_size, hidden_size), nn.ReLU(), nn.Dropout(0.2),
+            nn.Linear(hidden_size, output_size)
         )
-        self.head = nn.Linear(hidden_dim, 3)
+    def forward(self, x): return self.classifier(x)
 
-    def forward(self, x):
-        h = self.body(x)
-        return self.head(h)
+class FocalLoss(nn.Module):
+    def __init__(self, gamma=2, pos_weight=None, reduction='mean'):
+        super().__init__()
+        self.gamma = gamma
+        self.reduction = reduction
+        self.pos_weight = pos_weight
+    def forward(self, logits, targets):
+        bce_loss = F.binary_cross_entropy_with_logits(
+            logits, targets, reduction='none', pos_weight=self.pos_weight
+        )
+        pt = torch.exp(-bce_loss)
+        focal_loss = ((1 - pt) ** self.gamma) * bce_loss
+        return focal_loss.mean() if self.reduction == 'mean' else focal_loss.sum()
 
-def train_one_epoch(model, loader, optimizer, losses, device):
+def compute_class_weights(y):
+    class_weights = []
+    for i in range(y.shape[1]):
+        pos = np.sum(y[:, i])
+        neg = y.shape[0] - pos
+        if pos == 0:  # avoid div0
+            w = 1.0
+        else:
+            w = neg / pos
+        class_weights.append(w)
+    return class_weights
+
+def train_model(model, dataloader, optimizer, device, criteria):
     model.train()
-    total_loss = 0.0
-    for Xb, yb in loader:
-        Xb, yb = Xb.to(device), yb.to(device)
+    running_loss = 0.0
+    for X, Y in dataloader:
+        X, Y = X.to(device), Y.to(device)
         optimizer.zero_grad()
-        logits = model(Xb)
-        loss = sum(
-            losses[i](logits[:, i:i+1], yb[:, i:i+1])
-            for i in range(3)
-        )
+        logits = model(X)
+        loss = 0
+        for i, criterion in enumerate(criteria):
+            loss += criterion(logits[:, i].unsqueeze(1), Y[:, i].unsqueeze(1))
         loss.backward()
         optimizer.step()
-        total_loss += loss.item()
-    return total_loss / len(loader)
+        running_loss += loss.item()
+    return running_loss / len(dataloader)
 
-def evaluate(model, loader, device):
+def evaluate_model(model, dataloader, device, criteria):
     model.eval()
     all_logits, all_labels = [], []
+    total_loss = 0.0
     with torch.no_grad():
-        for Xb, yb in loader:
-            logits = model(Xb.to(device)).cpu().numpy()
-            all_logits.append(logits)
-            all_labels.append(yb.numpy())
-    logits = np.vstack(all_logits)
-    y_true = np.vstack(all_labels)
+        for X, Y in dataloader:
+            X, Y = X.to(device), Y.to(device)
+            logits = model(X)
+            loss = 0
+            for i, criterion in enumerate(criteria):
+                loss += criterion(logits[:, i].unsqueeze(1), Y[:, i].unsqueeze(1))
+            total_loss += loss.item()
+            all_logits.append(logits.cpu())
+            all_labels.append(Y.cpu())
+    logits = torch.cat(all_logits, dim=0).numpy()
+    labels = torch.cat(all_labels, dim=0).numpy()
+    return logits, labels, total_loss / len(dataloader)
 
-    y_prob = 1 / (1 + np.exp(-logits))
-    y_prob = np.nan_to_num(y_prob, nan=0.5)
+def compute_eddi(y_true, y_pred, sensitive_labels):
+    unique_groups = np.unique(sensitive_labels)
+    overall_error = np.mean(y_pred != y_true)
+    denom = max(overall_error, 1 - overall_error) if overall_error not in [0, 1] else 1.0
+    subgroup_eddi = {}
+    for group in unique_groups:
+        mask = (sensitive_labels == group)
+        if np.sum(mask) == 0:
+            subgroup_eddi[group] = np.nan
+        else:
+            er_group = np.mean(y_pred[mask] != y_true[mask])
+            subgroup_eddi[group] = (er_group - overall_error) / denom
+    eddi_attr = np.sqrt(np.nansum(np.array(list(subgroup_eddi.values())) ** 2)) / len(unique_groups)
+    return eddi_attr, subgroup_eddi
 
-    y_pred = (y_prob >= 0.5).astype(int)
+def calculate_eo_metric(y_true, y_pred, sensitive_attr):
+    unique_groups = np.unique(sensitive_attr)
+    tpr_list, fpr_list = {}, {}
+    for group in unique_groups:
+        mask = sensitive_attr == group
+        cm = confusion_matrix(y_true[mask], y_pred[mask], labels=[0,1])
+        if cm.shape == (2,2):
+            tn, fp, fn, tp = cm.ravel()
+            tpr = tp / (tp + fn) if (tp + fn) > 0 else 0
+            fpr = fp / (fp + tn) if (fp + tn) > 0 else 0
+        else:
+            tpr = fpr = 0
+        tpr_list[group] = tpr
+        fpr_list[group] = fpr
+    tpr_diffs, fpr_diffs = [], []
+    groups = list(unique_groups)
+    for i in range(len(groups)):
+        for j in range(i+1, len(groups)):
+            tpr_diffs.append(abs(tpr_list[groups[i]] - tpr_list[groups[j]]))
+            fpr_diffs.append(abs(fpr_list[groups[i]] - fpr_list[groups[j]]))
+    EOTPR = np.mean(tpr_diffs) if tpr_diffs else 0.0
+    EOFPR = np.mean(fpr_diffs) if fpr_diffs else 0.0
+    eo_metric = np.mean([EOTPR, EOFPR])
+    return eo_metric, EOTPR, EOFPR
 
-    metrics = {}
-    names = ['Mortality','PE','PH']
-    for i, name in enumerate(names):
-        yt = y_true[:, i]
-        yp = y_prob[:, i]
+def train_pipeline():
+    import torch
+    import pandas as pd
+    import numpy as np
+    from torch.utils.data import DataLoader
+    from skmultilearn.model_selection import iterative_train_test_split
+    from scipy.special import expit
 
-        # mask any remaining NaNs (should not happen after nan_to_num)
-        mask = ~np.isnan(yp)
-        yt_m, yp_m = yt[mask], yp[mask]
-        ypr = (yp_m >= 0.5).astype(int)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print("Device:", device)
 
-        tn, fp, fn, tp = confusion_matrix(yt_m, ypr, labels=[0,1]).ravel()
-        tpr = tp/(tp+fn) if tp+fn>0 else 0.0
-        fpr = fp/(fp+tn) if fp+tn>0 else 0.0
+    df = pd.read_csv("final_unstructured_embeddings.csv")
+    emb_columns = [col for col in df.columns if col.startswith("emb_")]
+    embeddings = df[emb_columns].values
+    y = df[['short_term_mortality', 'pe', 'ph']].values.astype(float)
 
-        metrics[name] = {
-            'AUROC'    : roc_auc_score(yt_m, yp_m),
-            'AUPRC'    : average_precision_score(yt_m, yp_m),
-            'F1'       : f1_score(yt_m, ypr, zero_division=0),
-            'Recall'   : recall_score(yt_m, ypr, zero_division=0),
-            'Precision': precision_score(yt_m, ypr, zero_division=0),
-            'TPR'      : tpr,
-            'FPR'      : fpr
-        }
-    return metrics
+    # Multi-label stratified split
+    X = np.arange(len(df)).reshape(-1, 1)  # Use index since we already have embeddings
+    X_trainval, y_trainval, X_test, y_test = iterative_train_test_split(X, y, test_size=0.2)
+    X_train, y_train, X_val, y_val = iterative_train_test_split(X_trainval, y_trainval, test_size=0.1)
 
-def main():
-    torch.manual_seed(42)
-    np.random.seed(42)
+    train_idx = X_train.flatten()
+    val_idx = X_val.flatten()
+    test_idx = X_test.flatten()
+    print(f"Train size: {len(train_idx)}, Val: {len(val_idx)}, Test: {len(test_idx)}")
 
-    p = argparse.ArgumentParser(description="Unstructured‐only classifier")
-    p.add_argument('-u','--unstruct',
-                   default='final_unstructured_embeddings.csv',
-                   help='CSV with emb_* columns and labels: short_term_mortality, pe, ph')
-    p.add_argument('-e','--epochs', type=int, default=20)
-    p.add_argument('-b','--batch',  type=int, default=32)
-    args = p.parse_args()
+    X_train_e, y_train_e = embeddings[train_idx], y[train_idx]
+    X_val_e, y_val_e = embeddings[val_idx], y[val_idx]
+    X_test_e, y_test_e = embeddings[test_idx], y[test_idx]
 
-    df = pd.read_csv(args.unstruct, low_memory=False)
-    emb_cols = [c for c in df.columns if c.startswith('emb_')]
-    for lbl in ['short_term_mortality','pe','ph']:
-        if lbl not in df.columns:
-            raise ValueError(f"Missing label column: {lbl}")
+    # Dataset and loaders
+    ds_train = UnstructuredDataset(X_train_e, y_train_e)
+    ds_val = UnstructuredDataset(X_val_e, y_val_e)
+    ds_test = UnstructuredDataset(X_test_e, y_test_e)
 
-    X_all = df[emb_cols].values
-    Y_all = df[['short_term_mortality','pe','ph']].values
+    loader_train = DataLoader(ds_train, batch_size=16, shuffle=True)
+    loader_val = DataLoader(ds_val, batch_size=16, shuffle=False)
+    loader_test = DataLoader(ds_test, batch_size=16, shuffle=False)
 
-    X_tmp, y_tmp, X_test, y_test = iterative_train_test_split(X_all, Y_all, test_size=0.2)
-    val_frac = 0.05/0.8
-    X_train, y_train, X_val, y_val = iterative_train_test_split(X_tmp, y_tmp, test_size=val_frac)
+    # Compute class weights (per label) for Focal Loss
+    class_weights = compute_class_weights(y_train_e)
+    print("Class weights (inverse positive freq):", class_weights)
 
-    train_ds = UnstructuredDataset(X_train, y_train[:,0], y_train[:,1], y_train[:,2])
-    val_ds   = UnstructuredDataset(X_val,   y_val[:,0],   y_val[:,1],   y_val[:,2])
-    test_ds  = UnstructuredDataset(X_test,  y_test[:,0],  y_test[:,1],  y_test[:,2])
+    # Focal loss for each task
+    focal_criteria = [
+        FocalLoss(gamma=2, pos_weight=torch.tensor(class_weights[i], dtype=torch.float32, device=device))
+        for i in range(3)
+    ]
 
-    train_loader = DataLoader(train_ds, batch_size=args.batch, shuffle=True)
-    val_loader   = DataLoader(val_ds,   batch_size=args.batch)
-    test_loader  = DataLoader(test_ds,  batch_size=args.batch)
-
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    model  = Classifier(input_dim=X_train.shape[1]).to(device)
-
-    pos_weights = []
-    for i in range(3):
-        pos = y_train[:,i].sum()
-        neg = len(y_train) - pos
-        w = min(neg/(pos+1e-6), 10.0)
-        pos_weights.append(torch.tensor([w], device=device))
-    losses = [FocalLoss(pos_weight=pw).to(device) for pw in pos_weights]
-
-    optimizer = AdamW(model.parameters(), lr=2e-5)
-    scheduler = ReduceLROnPlateau(optimizer, factor=0.5, patience=2)
+    classifier = UnstructuredClassifier(input_size=embeddings.shape[1], hidden_size=256, output_size=3).to(device)
+    optimizer = AdamW(classifier.parameters(), lr=2e-5, weight_decay=0.01)
 
     best_val_loss = float('inf')
-    patience_cnt  = 0
-    for epoch in range(1, args.epochs+1):
-        tr_loss = train_one_epoch(model, train_loader, optimizer, losses, device)
-
-        val_loss = 0.0
-        model.eval()
-        with torch.no_grad():
-            for Xb, yb in val_loader:
-                out = model(Xb.to(device))
-                for i in range(3):
-                    val_loss += losses[i](out[:,i:i+1], yb[:,i:i+1].to(device)).item()
-        val_loss /= len(val_loader)
-
-        scheduler.step(val_loss)
-        print(f"[Epoch {epoch}] Train={tr_loss:.4f} Val={val_loss:.4f}")
-
-        # always save on epoch 1 or when improved
-        if epoch == 1 or val_loss < best_val_loss:
+    epochs_no_improve = 0
+    max_epochs = 30
+    for epoch in range(max_epochs):
+        train_loss = train_model(classifier, loader_train, optimizer, device, focal_criteria)
+        _, _, val_loss = evaluate_model(classifier, loader_val, device, focal_criteria)
+        print(f"Epoch {epoch+1}: Train Loss={train_loss:.4f}, Val Loss={val_loss:.4f}")
+        if val_loss < best_val_loss:
             best_val_loss = val_loss
-            torch.save(model.state_dict(), "best_model.pt")
-            patience_cnt = 0
-            print(" → saved best_model.pt")
+            torch.save(classifier.state_dict(), "best_model.pt")
+            epochs_no_improve = 0
+            print("Saved best model.")
         else:
-            patience_cnt += 1
-            print(f" → no improve {patience_cnt}/5")
-            if patience_cnt >= 5:
-                print("Early stopping.")
-                break
+            epochs_no_improve += 1
+        if epochs_no_improve >= 5:
+            break
 
-    if not os.path.exists("best_model.pt"):
-        raise FileNotFoundError("best_model.pt not found after training.")
-    model.load_state_dict(torch.load("best_model.pt", map_location=device))
-    test_metrics = evaluate(model, test_loader, device)
+    classifier.load_state_dict(torch.load("best_model.pt"))
+    logits, labels, _ = evaluate_model(classifier, loader_test, device, focal_criteria)
+    probs = expit(logits)
+    preds = (probs >= 0.5).astype(int)
+    task_names = ['mortality', 'pe', 'ph']
+    for i, name in enumerate(task_names):
+        from sklearn.metrics import roc_auc_score, average_precision_score, f1_score, recall_score, precision_score
+        auc = roc_auc_score(labels[:,i], probs[:,i]) if len(np.unique(labels[:,i])) > 1 else np.nan
+        auprc = average_precision_score(labels[:,i], probs[:,i]) if len(np.unique(labels[:,i])) > 1 else np.nan
+        f1 = f1_score(labels[:,i], preds[:,i], zero_division=0)
+        rec = recall_score(labels[:,i], preds[:,i], zero_division=0)
+        prec = precision_score(labels[:,i], preds[:,i], zero_division=0)
+        print(f"\n{name.upper()} AUROC={auc:.3f}, AUPRC={auprc:.3f}, F1={f1:.3f}, Recall={rec:.3f}, Prec={prec:.3f}")
 
-    print("\n=== Test Set Metrics ===")
-    for name, stats in test_metrics.items():
-        summary = ", ".join(f"{k}={v:.3f}" for k,v in stats.items())
-        print(f"{name}: {summary}")
+    sensitive_dict = {
+        "age": df.iloc[test_idx]['age_bucket'].values if 'age_bucket' in df else df.iloc[test_idx]['anchor_age'].values,
+        "ethnicity": df.iloc[test_idx]['ethnicity'].fillna("Other").str.lower().values,
+        "race": df.iloc[test_idx]['race_group'].fillna("Other").str.lower().values,
+        "insurance": df.iloc[test_idx]['insurance_group'].fillna("Other").str.lower().values
+    }
+    for i, name in enumerate(task_names):
+        print(f"\n--- {name.upper()} FAIRNESS METRICS ---")
+        for sattr in sensitive_dict:
+            eddi, _ = compute_eddi(labels[:,i], preds[:,i], sensitive_dict[sattr])
+            eo, _, _ = calculate_eo_metric(labels[:,i], preds[:,i], sensitive_dict[sattr])
+            print(f"{sattr.capitalize():<10} EDDI={eddi:.4f}, EO={eo:.4f}")
 
-if __name__ == '__main__':
-    main()
+if __name__ == "__main__":
+    train_pipeline()
