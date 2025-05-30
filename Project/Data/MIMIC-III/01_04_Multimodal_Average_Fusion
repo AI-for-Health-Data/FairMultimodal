@@ -1,0 +1,652 @@
+import time
+import random
+import argparse
+import numpy as np
+import pandas as pd
+from tqdm import tqdm
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from torch.optim.lr_scheduler import ReduceLROnPlateau
+from torch.utils.data import TensorDataset, DataLoader, Subset
+from transformers import BertModel, BertConfig, AutoTokenizer
+from sklearn.metrics import roc_auc_score, average_precision_score, f1_score, recall_score, precision_score, confusion_matrix
+from iterstrat.ml_stratifiers import MultilabelStratifiedShuffleSplit
+
+DEBUG = True
+
+class FocalLoss(nn.Module):
+    def __init__(self, gamma=2, alpha=None, reduction='mean', pos_weight=None):
+        super().__init__()
+        self.gamma = gamma
+        self.alpha = alpha
+        self.reduction = reduction
+        self.pos_weight = pos_weight
+
+    def forward(self, logits, targets):
+        bce = F.binary_cross_entropy_with_logits(
+            logits, targets, reduction='none', pos_weight=self.pos_weight
+        )
+        pt = torch.exp(-bce)
+        loss = ((1 - pt) ** self.gamma) * bce
+        if self.alpha is not None:
+            loss = self.alpha * loss
+        if self.reduction == 'mean':
+            return loss.mean()
+        elif self.reduction == 'sum':
+            return loss.sum()
+        return loss
+
+def get_pos_weight(labels, device, clip_max=10.0):
+    pos = labels.sum()
+    neg = len(labels) - pos
+    if pos == 0:
+        w = torch.tensor(1.0, device=device)
+    else:
+        w_val = (neg / pos).item()
+        w = torch.tensor(min(w_val, clip_max), device=device)
+    if DEBUG:
+        print(f"Pos weight: {w.item():.3f}")
+    return w
+
+def get_age_bucket(age):
+    age = int(age)
+    if 18 <= age <= 29: return '18-29'
+    if 30 <= age <= 49: return '30-49'
+    if 50 <= age <= 69: return '50-69'
+    return '70-90'
+
+def map_ethnicity(code, mapping):
+    grp = mapping.get(code, 'others').lower()
+    if 'white' in grp: return 'white'
+    if 'black' in grp: return 'black'
+    if 'asian' in grp: return 'asian'
+    if 'hispanic' in grp or 'latino' in grp: return 'hispanic'
+    return 'others'
+
+def map_insurance(code, mapping):
+    return mapping.get(code, 'other')
+
+def compute_eddi(y_true, y_pred, groups, threshold=0.5):
+    y_pred_bin = (np.array(y_pred) > threshold).astype(int)
+    overall_err = np.mean(y_pred_bin != y_true)
+    denom = overall_err if 0 < overall_err < 1 else 1.0
+    uniq = np.unique(groups)
+    subs = {}
+    for u in uniq:
+        mask = (groups == u)
+        if mask.sum() == 0:
+            subs[u] = np.nan
+        else:
+            err = np.mean(y_pred_bin[mask] != y_true[mask])
+            subs[u] = (err - overall_err) / denom
+    eddi = np.sqrt(np.nansum(np.array(list(subs.values()))**2)) / len(uniq)
+    return eddi, subs
+
+class BioClinicalBERT_FT(nn.Module):
+    def __init__(self, base_model: BertModel, device: torch.device):
+        super(BioClinicalBERT_FT, self).__init__()
+        self.BioBert = base_model.to(device)
+        self.device = device
+
+    def forward(self, input_ids: torch.LongTensor, attention_mask: torch.LongTensor) -> torch.FloatTensor:
+        outputs = self.BioBert(input_ids=input_ids, attention_mask=attention_mask)
+        return outputs.last_hidden_state[:, 0, :]
+
+def apply_bioclinicalbert_on_patient_notes(
+    df: pd.DataFrame,
+    note_columns: list,
+    tokenizer: AutoTokenizer,
+    model: BioClinicalBERT_FT,
+    device: torch.device,
+    aggregation: str = "mean"
+) -> np.ndarray:
+    patient_ids = df["subject_id"].unique()
+    all_embs: list[np.ndarray] = []
+
+    for pid in tqdm(patient_ids, desc="Text → BioClinicalBERT CLS"):
+        sub = df[df.subject_id == pid]
+        notes = []
+        for c in note_columns:
+            texts = sub[c].dropna().tolist()
+            notes += [t for t in texts if isinstance(t, str) and t.strip()]
+
+        if not notes:
+            all_embs.append(np.zeros(model.BioBert.config.hidden_size))
+            continue
+
+        embs: list[np.ndarray] = []
+        for n in notes:
+            enc = tokenizer.encode_plus(
+                n,
+                add_special_tokens=True,
+                max_length=128,
+                padding="max_length",
+                truncation=True,
+                return_attention_mask=True,
+                return_tensors="pt",
+            )
+            inp = enc["input_ids"].to(device)
+            mask = enc["attention_mask"].to(device)
+            with torch.no_grad():
+                emb = model(inp, mask)
+            embs.append(emb.cpu().numpy())
+
+        embs = np.vstack(embs)
+        agg = embs.mean(axis=0) if aggregation == "mean" else embs.max(axis=0)
+        all_embs.append(agg)
+
+    return np.vstack(all_embs)
+
+class BEHRTModel(nn.Module):
+    def __init__(self,
+                 num_diseases: int,
+                 num_ages: int,
+                 num_segments: int,
+                 num_admission_locs: int,
+                 num_discharge_locs: int,
+                 num_genders: int,
+                 num_ethnicities: int,
+                 num_races: int,
+                 num_insurances: int,
+                 hidden_size: int = 768):
+        super(BEHRTModel, self).__init__()
+        vocab_size = (num_diseases + num_ages + num_segments + num_admission_locs + num_discharge_locs + 2)
+        config = BertConfig(
+            vocab_size=vocab_size,
+            hidden_size=hidden_size,
+            num_hidden_layers=12,
+            num_attention_heads=12,
+            intermediate_size=3072,
+            max_position_embeddings=512,
+            type_vocab_size=2,
+            hidden_dropout_prob=0.1,
+            attention_probs_dropout_prob=0.1
+        )
+        self.bert = BertModel(config)
+        self.age_emb       = nn.Embedding(num_ages, hidden_size)
+        self.seg_emb       = nn.Embedding(num_segments, hidden_size)
+        self.adm_emb       = nn.Embedding(num_admission_locs, hidden_size)
+        self.dis_emb       = nn.Embedding(num_discharge_locs, hidden_size)
+        self.gender_emb    = nn.Embedding(num_genders, hidden_size)
+        self.ethnicity_emb = nn.Embedding(num_ethnicities, hidden_size)
+        self.race_emb      = nn.Embedding(num_races, hidden_size)
+        self.insurance_emb = nn.Embedding(num_insurances, hidden_size)
+
+    def forward(self,
+                input_ids, attention_mask,
+                age_ids, seg_ids,
+                adm_ids, dis_ids,
+                gender_ids, ethnicity_ids, race_ids, insurance_ids):
+        age_ids       = torch.clamp(age_ids, 0, self.age_emb.num_embeddings-1)
+        seg_ids       = torch.clamp(seg_ids, 0, self.seg_emb.num_embeddings-1)
+        adm_ids       = torch.clamp(adm_ids, 0, self.adm_emb.num_embeddings-1)
+        dis_ids       = torch.clamp(dis_ids, 0, self.dis_emb.num_embeddings-1)
+        gender_ids    = torch.clamp(gender_ids, 0, self.gender_emb.num_embeddings-1)
+        ethnicity_ids = torch.clamp(ethnicity_ids, 0, self.ethnicity_emb.num_embeddings-1)
+        race_ids      = torch.clamp(race_ids, 0, self.race_emb.num_embeddings-1)
+        insurance_ids = torch.clamp(insurance_ids, 0, self.insurance_emb.num_embeddings-1)
+
+        bert_out = self.bert(input_ids=input_ids, attention_mask=attention_mask)
+        cls_tok  = bert_out.last_hidden_state[:, 0, :]
+        demo = (
+               self.age_emb(age_ids)
+             + self.seg_emb(seg_ids)
+             + self.adm_emb(adm_ids)
+             + self.dis_emb(dis_ids)
+             + self.gender_emb(gender_ids)
+             + self.ethnicity_emb(ethnicity_ids)
+             + self.race_emb(race_ids)
+             + self.insurance_emb(insurance_ids)
+        ) / 8.0
+        return cls_tok + demo
+
+class MultimodalTransformer(nn.Module):
+    def __init__(self, text_embed_size, BEHRT, device, hidden_size=512):
+        super(MultimodalTransformer, self).__init__()
+        self.BEHRT = BEHRT
+        self.device = device
+        self.ts_linear   = nn.Linear(BEHRT.bert.config.hidden_size, 256)
+        self.text_linear = nn.Linear(text_embed_size, 256)
+        self.classifier = nn.Sequential(
+            nn.Linear(256*2, hidden_size),
+            nn.ReLU(),
+            nn.Dropout(0.1),
+            nn.Linear(hidden_size, 3)
+        )
+
+    def forward(self,
+                dummy_input_ids, dummy_attn_mask,
+                age_ids, segment_ids, adm_loc_ids, discharge_loc_ids,
+                gender_ids, ethnicity_ids, race_ids, insurance_ids,
+                aggregated_text_embedding):
+        structured_emb = self.BEHRT(
+            dummy_input_ids, dummy_attn_mask,
+            age_ids, segment_ids, adm_loc_ids, discharge_loc_ids,
+            gender_ids, ethnicity_ids, race_ids, insurance_ids
+        )
+        ts_pre   = self.ts_linear(structured_emb)
+        text_pre = self.text_linear(aggregated_text_embedding)
+        ts_proj   = F.relu(ts_pre)
+        text_proj = F.relu(text_pre)
+        combined_post = torch.cat((ts_proj, text_proj), dim=1)
+        logits = self.classifier(combined_post)
+        return logits[:,0].unsqueeze(1), logits[:,1].unsqueeze(1), logits[:,2].unsqueeze(1), torch.cat((ts_pre, text_pre), dim=1)
+
+
+def train_step(model, loader, optimizer, device, crit_m, crit_pe, crit_ph):
+    model.train()
+    total_loss = 0.0
+    for batch in loader:
+        (dids, dmask,
+         age, seg, adm, dis,
+         gend, eth, race, ins,
+         txt_emb,
+         lab_m, lab_pe, lab_ph) = [x.to(device) for x in batch]
+
+        optimizer.zero_grad()
+        mlog, pelog, phlog, _ = model(
+            dids, dmask,
+            age, seg, adm, dis,
+            gend, eth, race, ins,
+            txt_emb
+        )
+        loss = (
+            crit_m(mlog, lab_m.unsqueeze(1)) +
+            crit_pe(pelog, lab_pe.unsqueeze(1)) +
+            crit_ph(phlog, lab_ph.unsqueeze(1))
+        )
+        loss.backward()
+        optimizer.step()
+        total_loss += loss.item()
+    return total_loss
+
+def evaluate_model_loss(model, loader, device, crit_m, crit_pe, crit_ph):
+    model.eval()
+    total = 0.0
+    with torch.no_grad():
+        for batch in loader:
+            (dids, dmask,
+             age, seg, adm, dis,
+             gend, eth, race, ins,
+             txt_emb,
+             lab_m, lab_pe, lab_ph) = [x.to(device) for x in batch]
+
+            mlog, pelog, phlog, _ = model(
+                dids, dmask,
+                age, seg, adm, dis,
+                gend, eth, race, ins,
+                txt_emb
+            )
+            total += (
+                crit_m(mlog, lab_m.unsqueeze(1)).item() +
+                crit_pe(pelog, lab_pe.unsqueeze(1)).item() +
+                crit_ph(phlog, lab_ph.unsqueeze(1)).item()
+            )
+    return total / len(loader)
+
+def evaluate_model_metrics(model, loader, device,
+                           threshold=0.5, print_eddi=False,
+                           eth_map=None, ins_map=None, race_map=None):
+    model.eval()
+    all_logits = {'m':[], 'pe':[], 'ph':[]}
+    all_labels = {'m':[], 'pe':[], 'ph':[]}
+    all_age = []
+    all_eth = []
+    all_race = []
+    all_ins = []
+
+    with torch.no_grad():
+        for batch in loader:
+            (dids, dmask,
+             age, seg, adm, dis,
+             gend, eth, race, ins,
+             txt_emb,
+             lab_m, lab_pe, lab_ph) = [x.to(device) for x in batch]
+
+            mlog, pelog, phlog, _ = model(
+                dids, dmask,
+                age, seg, adm, dis,
+                gend, eth, race, ins,
+                txt_emb
+            )
+            all_logits['m'].append(torch.sigmoid(mlog).cpu().numpy())
+            all_logits['pe'].append(torch.sigmoid(pelog).cpu().numpy())
+            all_logits['ph'].append(torch.sigmoid(phlog).cpu().numpy())
+            all_labels['m'].append(lab_m.cpu().numpy())
+            all_labels['pe'].append(lab_pe.cpu().numpy())
+            all_labels['ph'].append(lab_ph.cpu().numpy())
+            all_age.append(age.cpu().numpy())
+            all_eth.append(eth.cpu().numpy())
+            all_race.append(race.cpu().numpy())
+            all_ins.append(ins.cpu().numpy())
+
+    for k in all_logits:
+        all_logits[k] = np.vstack(all_logits[k]).squeeze()
+        all_labels[k] = np.hstack(all_labels[k]).squeeze()
+    age_sub  = np.hstack(all_age)
+    eth_sub  = np.hstack(all_eth)
+    race_sub = np.hstack(all_race)
+    ins_sub  = np.hstack(all_ins)
+
+    age_grp  = np.array([get_age_bucket(a) for a in age_sub])
+    eth_grp  = np.array([map_ethnicity(int(e), eth_map) for e in eth_sub])
+    race_grp = np.array([race_map.get(int(r),'other') for r in race_sub])
+    ins_grp  = np.array([map_insurance(int(i), ins_map) for i in ins_sub])
+
+    attributes = {
+        'age':      (age_grp,   np.unique(age_grp)),
+        'ethnicity':(eth_grp,  np.unique(eth_grp)),
+        'race':     (race_grp,  np.unique(race_grp)),
+        'insurance':(ins_grp,  np.unique(ins_grp))
+    }
+
+    tasks = ['m','pe','ph']
+    names = {'m':'mortality','pe':'pe','ph':'ph'}
+    metrics = {}
+
+    def pairwise_gap(vals):
+        """Return average pairwise absolute difference or 0 if fewer than 2 valid entries."""
+        clean = [v for v in vals if not np.isnan(v)]
+        if len(clean) < 2:
+            return 0.0
+        diffs = [abs(a-b) for i,a in enumerate(clean) for b in clean[i+1:]]
+        return float(np.mean(diffs))
+
+    for t in tasks:
+        y_true = all_labels[t]
+        y_prob = all_logits[t]
+        preds  = (y_prob > threshold).astype(int)
+
+        try:   auc  = roc_auc_score(y_true, y_prob)
+        except: auc = np.nan
+        try:   ap   = average_precision_score(y_true, y_prob)
+        except: ap  = np.nan
+        f1    = f1_score(y_true, preds, zero_division=0)
+        rec   = recall_score(y_true, preds, zero_division=0)
+        prec  = precision_score(y_true, preds, zero_division=0)
+
+        eddi_stats = {}
+        eddi_vals  = []
+        for attr,(grp,order) in attributes.items():
+            val, sub = compute_eddi(y_true, y_prob, grp, threshold)
+            eddi_stats[attr] = {'overall': val, 'sub': sub}
+            eddi_vals.append(val)
+        eddi_stats['final_eddi'] = float(np.mean(eddi_vals))
+
+        gaps = {}
+        for attr,(grp,order) in attributes.items():
+            tprs, fprs = [], []
+            for g in order:
+                mask = (grp == g)
+                if mask.sum() == 0:
+                    tprs.append(np.nan)
+                    fprs.append(np.nan)
+                else:
+                    yg = preds[mask]; tg = y_true[mask]
+                    TP = ((yg==1)&(tg==1)).sum()
+                    FN = ((yg==0)&(tg==1)).sum()
+                    FP = ((yg==1)&(tg==0)).sum()
+                    TN = ((yg==0)&(tg==0)).sum()
+                    tprs.append(TP/(TP+FN) if (TP+FN)>0 else np.nan)
+                    fprs.append(FP/(FP+TN) if (FP+TN)>0 else np.nan)
+
+            tpr_gap = pairwise_gap(tprs)
+            fpr_gap = pairwise_gap(fprs)
+            eo_gap  = (tpr_gap + fpr_gap) / 2.0
+
+            gaps[attr] = {
+                'TPR_gap': tpr_gap,
+                'FPR_gap': fpr_gap,
+                'EO':      eo_gap
+            }
+
+        metrics[names[t]] = {
+            'aucroc':   auc,
+            'auprc':    ap,
+            'f1':       f1,
+            'recall':   rec,
+            'precision':prec,
+            'eddi':     eddi_stats,
+            'gaps':     gaps
+        }
+
+    return metrics
+
+def extract_fused_embeddings(model, loader, device,
+                             eth_map, ins_map, race_map):
+    model.eval()
+    embs=[]
+    labs=[]
+    atts=[]
+    with torch.no_grad():
+        for batch in loader:
+            (dids, dmask,
+             age, seg, adm, dis,
+             gend, eth, race, ins,
+             txt_emb,
+             lab_m, lab_pe, lab_ph) = [x.to(device) for x in batch]
+
+            _,_,_, fused = model(
+                dids, dmask,
+                age, seg, adm, dis,
+                gend, eth, race, ins,
+                txt_emb
+            )
+            embs.append(fused.cpu())
+            labs.append(torch.stack([lab_m,lab_pe,lab_ph],dim=1).cpu())
+            # sensitive attributes
+            atts += list(zip(
+                [get_age_bucket(a.item()) for a in age],
+                [map_ethnicity(e.item(), eth_map) for e in eth],
+                [race_map.get(r.item(),'other')      for r in race],
+                [map_insurance(i.item(), ins_map)   for i in ins]
+            ))
+
+    embs = torch.cat(embs,dim=0).numpy()
+    labs = torch.cat(labs,dim=0).numpy()
+    return embs, labs, atts
+
+def train_pipeline():
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print("Using device:", device)
+
+    keep = {
+      "subject_id","hadm_id",
+      "short_term_mortality","pe","ph",
+      "age","FIRST_WARDID","LAST_WARDID",
+      "ETHNICITY","RACE","INSURANCE","GENDER"
+    }
+    struct = pd.read_csv("final_structured.csv")
+    struct = struct.rename(
+      columns={c:f"{c}_struct" for c in struct if c not in keep}
+    )
+    unstr = pd.read_csv("final_unstructured.csv", low_memory=False)
+    unstr = unstr.drop(columns=[
+      "short_term_mortality","pe","ph","age","segment",
+      "admission_loc","discharge_loc",
+      "gender","ethnicity","race","insurance"
+    ], errors="ignore")
+    df = pd.merge(
+      struct, unstr,
+      on=["subject_id","hadm_id"], how="inner"
+    )
+    if df.empty:
+        raise ValueError("Empty merge—check your keys!")
+
+    df.columns = [c.lower().strip() for c in df]
+    df = df.rename(columns={
+        "short_term_mortality":"mortality"
+    })
+    for col in ["mortality","pe","ph"]:
+        df[col] = df[col].astype(int)
+    # ensure race exists
+    if "race" not in df:
+        df["race"] = 0
+
+    note_cols = [c for c in df if c.startswith("note_")]
+    df = df[df[note_cols].apply(
+        lambda row: any(isinstance(x,str) and x.strip() for x in row),
+        axis=1
+    )].copy()
+    print("After note‐filter:", len(df))
+
+    for c in ["age","first_wardid","last_wardid","gender","ethnicity","race","insurance"]:
+        if c not in df:
+            df[c] = 0
+
+    df_u = df.groupby("subject_id", as_index=False).first()
+    print("Unique patients:", len(df_u))
+    if "segment" not in df_u:
+        df_u["segment"] = 0
+
+    sens = df_u[["age","ethnicity","race","insurance"]].copy()
+    sens["ethnicity"] = sens["ethnicity"].astype(str)
+    sens["race"]      = sens["race"].astype(str)
+    sens["insurance"]= sens["insurance"].astype(str)
+
+    sens["eth_code"] = sens["ethnicity"].astype("category").cat.codes
+    sens["race_code"]= sens["race"].astype("category").cat.codes
+    sens["ins_code"] = sens["insurance"].astype("category").cat.codes
+
+    df_u["ethnicity"] = sens["eth_code"]
+    df_u["race"]      = sens["race_code"]
+    df_u["insurance"]= sens["ins_code"]
+
+    eth_map  = dict(enumerate(sens["ethnicity"].astype("category").cat.categories))
+    race_map = dict(enumerate(sens["race"].astype("category").cat.categories))
+    ins_map  = dict(enumerate(sens["insurance"].astype("category").cat.categories))
+
+    base_bert = BertModel.from_pretrained("emilyalsentzer/Bio_ClinicalBERT")
+    tokenizer = AutoTokenizer.from_pretrained("emilyalsentzer/Bio_ClinicalBERT")
+
+    text_mod = BioClinicalBERT_FT(base_bert, device).to(device)
+    text_mod.eval()  
+
+    txt_emb_np = apply_bioclinicalbert_on_patient_notes(
+        df,         
+        note_cols, 
+        tokenizer, 
+        text_mod, 
+        device, 
+        aggregation="mean"
+    )
+
+    txt_emb_t = torch.tensor(txt_emb_np, dtype=torch.float32, device=device)
+
+    N = len(df_u)
+    dids   = torch.zeros((N,1),dtype=torch.long)
+    dmask  = torch.ones((N,1),dtype=torch.long)
+    age_ids = torch.tensor(df_u["age"].values, dtype=torch.long)
+    seg_ids = torch.tensor(df_u["segment"].values, dtype=torch.long)
+    adm_ids = torch.tensor(df_u["first_wardid"].values, dtype=torch.long)
+    dis_ids = torch.tensor(df_u["last_wardid"].values, dtype=torch.long)
+    gend_ids= torch.tensor(df_u["gender"].astype("category").cat.codes.values, dtype=torch.long)
+    eth_ids = torch.tensor(df_u["ethnicity"].values, dtype=torch.long)
+    race_ids= torch.tensor(df_u["race"].values, dtype=torch.long)
+    ins_ids = torch.tensor(df_u["insurance"].values, dtype=torch.long)
+
+    lab_m = torch.tensor(df_u["mortality"].values, dtype=torch.float32)
+    lab_pe= torch.tensor(df_u["pe"].values,        dtype=torch.float32)
+    lab_ph= torch.tensor(df_u["ph"].values,        dtype=torch.float32)
+
+    w_m  = get_pos_weight(df_u["mortality"], device)
+    w_pe = get_pos_weight(df_u["pe"],        device)
+    w_ph = get_pos_weight(df_u["ph"],        device)
+    crit_m  = FocalLoss(gamma=1, pos_weight=w_m,  reduction='mean')
+    crit_pe = FocalLoss(gamma=1, pos_weight=w_pe, reduction='mean')
+    crit_ph = FocalLoss(gamma=1, pos_weight=w_ph, reduction='mean')
+
+    ds = TensorDataset(
+        dids, dmask,
+        age_ids, seg_ids, adm_ids, dis_ids,
+        gend_ids, eth_ids, race_ids, ins_ids,
+        txt_emb_t,
+        lab_m, lab_pe, lab_ph
+    )
+    labels_arr = df_u[["mortality","pe","ph"]].values
+    msss1 = MultilabelStratifiedShuffleSplit(n_splits=1, test_size=0.2, random_state=42)
+    train_val_idx, test_idx = next(msss1.split(df_u, labels_arr))
+    ds_trainval = Subset(ds, train_val_idx)
+    ds_test     = Subset(ds, test_idx)
+
+    lv = labels_arr[train_val_idx]
+    msss2 = MultilabelStratifiedShuffleSplit(n_splits=1, test_size=0.05, random_state=42)
+    ti, vi = next(msss2.split(np.zeros(len(train_val_idx)), lv))
+    train_idx = [train_val_idx[i] for i in ti]
+    val_idx   = [train_val_idx[i] for i in vi]
+
+    ds_train = Subset(ds, train_idx)
+    ds_val   = Subset(ds, val_idx)
+
+    loader_tr = DataLoader(ds_train, batch_size=16, shuffle=True)
+    loader_va = DataLoader(ds_val,   batch_size=16, shuffle=False)
+    loader_te = DataLoader(ds_test,  batch_size=16, shuffle=False)
+
+    # 7.11) instantiate models
+    NUM_DISEASES       = df_u["hadm_id"].nunique()
+    NUM_AGES           = df_u["age"].nunique()
+    NUM_SEGMENTS       = 2
+    NUM_ADM_LOCS       = df_u["first_wardid"].nunique()
+    NUM_DIS_LOCS       = df_u["last_wardid"].nunique()
+    NUM_GENDERS        = df_u["gender"].nunique()
+    NUM_ETHNICITIES    = sens["eth_code"].nunique()
+    NUM_RACES          = sens["race_code"].nunique()
+    NUM_INSURANCES     = sens["ins_code"].nunique()
+
+    behrt = BEHRTModel(
+        NUM_DISEASES, NUM_AGES, NUM_SEGMENTS,
+        NUM_ADM_LOCS, NUM_DIS_LOCS,
+        NUM_GENDERS, NUM_ETHNICITIES,
+        NUM_RACES, NUM_INSURANCES,
+        hidden_size=768
+    ).to(device)
+
+    mm = MultimodalTransformer(
+        text_embed_size=768,
+        BEHRT=behrt,
+        device=device,
+        hidden_size=512
+    ).to(device)
+
+    opt = torch.optim.Adam(mm.parameters(), lr=1e-4)
+    sched = ReduceLROnPlateau(opt, mode='min', factor=0.1, patience=2, verbose=True)
+
+    best_val = float('inf')
+    patience=0
+    for epoch in range(20):
+        tr_loss = train_step(mm, loader_tr, opt, device, crit_m, crit_pe, crit_ph)
+        va_loss = evaluate_model_loss(mm, loader_va, device, crit_m, crit_pe, crit_ph)
+        print(f"[Epoch {epoch+1}] Train: {tr_loss/len(loader_tr):.4f} | Val: {va_loss:.4f}")
+        sched.step(va_loss)
+        if va_loss < best_val:
+            best_val = va_loss
+            torch.save(mm.state_dict(), "best_model.pt")
+            patience=0
+            print(" → saved best")
+        else:
+            patience+=1
+            if patience>=5:
+                print("Early stopping.")
+                break
+
+    mm.load_state_dict(torch.load("best_model.pt"))
+    metrics = evaluate_model_metrics(
+        mm, loader_te, device,
+        threshold=0.5, print_eddi=True,
+        eth_map=eth_map, ins_map=ins_map, race_map=race_map
+    )
+    print("Test metrics:", metrics)
+
+    embs, labs, atts = extract_fused_embeddings(
+        mm, loader_te, device,
+        eth_map, ins_map, race_map
+    )
+    np.savez("extracted_embeddings.npz",
+             embeddings=embs,
+             labels=labs,
+             attributes=atts)
+    print("Done.")
+
+if __name__ == "__main__":
+    train_pipeline()
