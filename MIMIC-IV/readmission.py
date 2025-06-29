@@ -17,7 +17,6 @@ def preprocess_notes(text: str) -> str:
     x = re.sub(r"\s+", " ", x)
     return x.strip().lower()
 
-# (same as before)
 patients = pd.read_csv("patients.csv.gz",
     usecols=["subject_id", "anchor_age"],
     compression="gzip"
