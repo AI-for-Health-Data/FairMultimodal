@@ -51,7 +51,7 @@ first_stays = (
     .drop_duplicates("subject_id", keep="first")
     .loc[:, ["subject_id","hadm_id","stay_id","intime","outtime","readmit_30d"]]
 )
-first_stays.to_csv(OUTPUT_DIR/"first_stays_labeled.csv", index=False)
+first_stays.to_csv("first_stays_labeled.csv", index=False)
 
 # Discharge summaries
 discharge = pd.read_csv("discharge.csv.gz",
