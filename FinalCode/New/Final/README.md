@@ -1,14 +1,14 @@
 # FAME: Fairness‑Aware Multimodal Embedding
 
 *Official implementation of **“Equitable Electronic Health Record Prediction with FAME: Fairness‑Aware Multimodal Embedding.”***
-*(Machine Learning for Healthcare, under review – 2024)*
+*Proceedings of the Machine Learning for Healthcare Conference (MLHC), 2024*
 
 <p align="center">
   <img src="https://img.shields.io/badge/Status-Under%20Review-blue" />
   <img src="https://img.shields.io/github/actions/workflow/status/NikkieHooman/FAME/ci.yml?label=Build" />
   <img src="https://img.shields.io/github/v/release/NikkieHooman/FAME?color=orange&label=Release" />
   <img src="https://img.shields.io/badge/License-MIT-green" />
-  <img src="https://img.shields.io/badge/Datasets-MIMIC--III%20%7C%20MIMIC--IV-red" />
+  <img src="https://img.shields.io/badge/Datasets-MIMIC--III%20%7C%20MIMIC--III-red" />
   <img src="https://img.shields.io/badge/Python-%3E%3D3.9-blue" />
   <!-- Uncomment when published on PyPI
   <img src="https://img.shields.io/pypi/v/fame-mlhc" />
@@ -60,8 +60,9 @@ The repository reproduces every experiment in the paper—baselines, ablations, 
 ## Architecture
 
 <p align="center">
-  <img src="docs/figures/fame_architecture.png" alt="FAME architecture: BEHRT & BioClinicalBERT feed EDDI‑weighted fusion with sigmoid feature gating." width="700"/>
+  <img width="1075" alt="Screenshot 2025-07-07 at 3 07 03 PM" src="https://github.com/user-attachments/assets/497f1821-ff3c-4eda-b1c7-5af0d11edb07" />
 </p>
+
 
 *Figure 1 – FAME combines BEHRT (structured data) and BioClinicalBERT (clinical notes) plus demographics. The fusion layer applies EDDI‑based modality weights and a sigmoid gate, then optimizes a joint BCE + EDDI loss.*
 
