@@ -1,7 +1,6 @@
-# FAME: Fairness‑Aware Multimodal Embedding
+FAME: Fairness-Aware Multimodal Embedding
 
-*Official implementation of **“Equitable Electronic Health Record Prediction with FAME: Fairness‑Aware Multimodal Embedding.”***
-*Proceedings of the Machine Learning for Healthcare Conference (MLHC), 2024*
+Official PyTorch implementation of our MLHC 2024 paper“Equitable Electronic Health Record Prediction with FAME: Fairness-Aware Multimodal Embedding”(Proceedings of the Machine Learning for Healthcare Conference (MLHC), 2024 – Accepted)
 
 ---
 ## Table of Contents
