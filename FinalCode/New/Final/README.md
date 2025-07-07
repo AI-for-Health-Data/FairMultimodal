@@ -106,40 +106,103 @@ CI will automatically run `pytest` on push / PR to validate basic functionality.
 
 ## Data Preparation
 
-1. **MIMIC Credentials** – Sign the PhysioNet credentialing agreement and download **MIMIC‑III v1.4** or **MIMIC‑IV v2.2**. Place CSVs in e.g. `/mnt/mimic`.
-2. Run `00_data.py` to generate
+1. **MIMIC Credentials** – Complete the PhysioNet credentialing quiz and download **MIMIC-III v1.4**. Drop all compressed CSVs (e.g., `ADMISSIONS.csv.gz`, `CHARTEVENTS.csv.gz`, …) into a single folder such as `/mnt/mimic`.
 
-   * `structured.pkl` – 2‑hour‑binned vitals, labs, demographics
-   * `notes.pkl` – token‑id chunks (≤512 tokens) and CLS vectors
-   * `labels.csv` – binary labels (mortality, readmission, ventilation)
-3. Sensitive attributes auto‑extracted: **age buckets, ethnicity, insurance**.
+2. Run
 
-*No patient data is committed to this repo.*
+   ```bash
+   python 00_data.py --mimic-dir /mnt/mimic --out-dir data/
+   ```
+
+   to create
+
+   * **`final_structured_with_feature_set_C_24h_2h_bins.csv`** – 2-hour-binned vitals, labs, inputs/outputs & meds plus demographics
+   * **`unstructured_with_demographics.csv`** – all first-ICU-stay notes (cleaned, lower-cased) split into ≤ 512-token chunks (`note_chunk_1`, `note_chunk_2`, …)
+   * Both files already include the task labels: **`short_term_mortality`**, **`los_binary`** (ICU-stay > 7 days), **`mechanical_ventilation`**
+
+3. Sensitive attributes are added automatically: **age\_bucket, ethnicity\_category, insurance\_category**.
+
+*No raw patient data is checked into this repository—only de-identified aggregates and cleaned text.*
 
 ---
+## 🚀 Training & Evaluation
 
-## Training & Evaluation
-
-Each script shares a common CLI—swap the filename to try another model.
+Each experiment script follows the **same command-line API** – swap the filename to run a different baseline, ablation or the full FAME model.
 
 ```bash
-# Baseline: BEHRT on mortality
-python 01_BEHRT.py --task mortality
+# 1)  Unimodal baseline ─ BEHRT (structured only)
+python 01_BEHRT.py                     --task mortality
 
-# Contrastive baseline (FairEHR‑CLP)
-python 06_FairEHR-CLP.py --task readmission --temp 0.07
+# 2)  Text-only baseline ─ BioClinicalBERT
+python 02_BioClinicalBERT.py           --task ventilation   --epochs 30
 
-# Ablation: EDDI‑only fusion
-python 08_multimodal_eddi_fusion.py --task ventilation --lambda 0.8
+# 3)  Demographic-free (un-awareness) baseline
+python 03_DfC.py                       --task los
+
+# 4)  Adversarial debiasing baseline
+python 04_AdvDebias.py                 --task mortality     --alpha 2
+
+# 5)  Fair Patient Model (stacked auto-encoder)
+python 05_FPM.py                       --task los
+
+# 6)  Contrastive debiasing (FairEHR-CLP, Wang et al. 2024)
+python 06_FairEHR-CLP.py               --task ventilation   --temp 0.07
+
+# 7)  Average-fusion ablation (equal weights)
+python 07_multimodal_average_fusion.py --task mortality
+
+# 8)  EDDI-weighted ablation (no sigmoid gate)
+python 08_multimodal_eddi_fusion.py    --task los           --lambda 0.8
+
+# 9)  Sigmoid-gate ablation (no EDDI weights)
+python 09_multimodal_sigmoid_fusion.py --task ventilation
+
+# 10) ★ **FAME** – Fairness-Aware Multimodal Embedding (full model)
+python 10_FAME.py                      --task mortality     --lambda 0.8 --epochs 50
 ```
 
-Metrics print every epoch and are logged to `outputs/logs/*.csv`:
+### Common flags
+
+| Flag                                   | Purpose                                              | Default        |
+| -------------------------------------- | ---------------------------------------------------- | -------------- |
+| `--task {mortality, los, ventilation}` | Selects the prediction head                          | `mortality`    |
+| `--epochs N`                           | Maximum training epochs (early-stopping on val-loss) | `50`           |
+| `--bsz N`                              | Mini-batch size                                      | `16`           |
+| `--lr FLOAT`                           | AdamW learning-rate                                  | model-specific |
+| `--lambda FLOAT`                       | Fairness-loss weight (EDDI)                          | script default |
+| `--temp FLOAT`                         | Contrastive temperature (FairEHR-CLP only)           | `0.07`         |
+| `--tensorboard`                        | Stream metrics to TensorBoard                        | *off*          |
+
+Run any script with `-h` or `--help` to see the complete set of options.
+
+### Outputs
+
+| Path                              | What you get                         |
+| --------------------------------- | ------------------------------------ |
+| `outputs/checkpoints/<run-id>.pt` | Best model (lowest **val-loss**)     |
+| `outputs/logs/<run-id>.csv`       | Per-epoch metrics                    |
+| `outputs/tensorboard/<run-id>/`   | TensorBoard event files (if enabled) |
+
+A typical log line looks like
 
 ```
-Epoch 5 | AUROC 0.943 | AUPRC 0.817 | EDDI 0.44 | EO 4.25
+Epoch 5 │ AUROC 0.943 │ AUPRC 0.817 │ EDDI 0.44 │ EO 4.25
 ```
 
-TensorBoard is supported via `--tensorboard` flag.
+where **EDDI** (Error-Distribution Disparity Index) and **EO** (Equalized-Odds gap, %) are the fairness measures reported in the paper.
+
+### Monitoring
+
+```bash
+tensorboard --logdir outputs/tensorboard
+```
+
+### Hardware notes
+
+* **FAME** back-propagates through both BEHRT and BioClinicalBERT **plus** the fairness loss.
+  *1 × A100 40 GB* trains the full model in ≈ 2 ½ h (all three tasks).
+  For lighter GPUs, reduce `--bsz`, freeze encoders with `--freeze-backbone`, or train each modality separately first (see comments inside `10_FAME.py`).
+
 
 ---
 
