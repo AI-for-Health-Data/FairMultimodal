@@ -1,6 +1,6 @@
 FAME · Fairness‑Aware Multimodal Embedding
 
-PyTorch implementation of our MLHC 2025 paper "Equitable Electronic Health Record Prediction with FAME: Fairness‑Aware Multimodal Embedding"
+PyTorch implementation of our MLHC 2025 paper "[Equitable Electronic Health Record Prediction with FAME: Fairness‑Aware Multimodal Embedding](https://doi.org/10.48550/arXiv.2506.13104)"
 
 FAME is an open‑source fairness‑aware multimodal model that blends structured EHR, free‑text clinical notes, and demographics while actively minimizing bias across sensitive groups.
 
