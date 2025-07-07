@@ -54,24 +54,71 @@ The repository reproduces every experiment in the paper—baselines, ablations, 
 
 ---
 
-## Folder Structure
+Folder Structure
 
-| File / Folder                     | Description                                          |
-| --------------------------------- | ---------------------------------------------------- |
-| `FinalCode/New/Final/00_data.py`                      | Extract & preprocess MIMIC data (structured + notes) |
-| `01_BEHRT.py`                     | Baseline using BEHRT (structured)                    |
-| `02_BioClinicalBERT.py`           | Baseline using BioClinicalBERT (notes)               |
-| `03_DfC.py`                       | Demographic‑free Classification baseline             |
-| `04_AdvDebias.py`                 | Adversarial debiasing baseline                       |
-| `05_FPM.py`                       | Fair Patient Model baseline                          |
-| `06_FairEHR-CLP.py`               | Contrastive debiasing baseline                       |
-| `07_multimodal_average_fusion.py` | Average fusion (3 modalities)                        |
-| `08_multimodal_eddi_fusion.py`    | EDDI‑only fusion (no sigmoid)                        |
-| `09_multimodal_sigmoid_fusion.py` | Sigmoid‑only fusion (no EDDI)                        |
-| `10_FAME.py`                      | **Full FAME** – EDDI + Sigmoid + joint loss          |
-| `requirements.txt`                | Python dependencies                                  |
-| `docs/figures/`                   | Architecture & result visuals                        |
-| `tests/`                          | Unit tests & CI scripts                              |
+File / Folder
+
+Description
+
+00_data.py
+
+Extract & preprocess MIMIC data (structured + notes)
+
+01_BEHRT.py
+
+Baseline using BEHRT (structured)
+
+02_BioClinicalBERT.py
+
+Baseline using BioClinicalBERT (notes)
+
+03_DfC.py
+
+Demographic‑free Classification baseline
+
+04_AdvDebias.py
+
+Adversarial debiasing baseline
+
+05_FPM.py
+
+Fair Patient Model baseline
+
+06_FairEHR-CLP.py
+
+Contrastive debiasing baseline
+
+07_multimodal_average_fusion.py
+
+Average fusion (3 modalities)
+
+08_multimodal_eddi_fusion.py
+
+EDDI‑only fusion (no sigmoid)
+
+09_multimodal_sigmoid_fusion.py
+
+Sigmoid‑only fusion (no EDDI)
+
+10_FAME.py
+
+Full FAME – EDDI + Sigmoid + joint loss
+
+11_MRO.py
+
+Multimodal Residual Optimization baseline (EMNLP 2022)
+
+requirements.txt
+
+Python dependencies
+
+docs/figures/
+
+Architecture & result visuals
+
+tests/
+
+Unit tests & CI scripts
 
 ---
 
