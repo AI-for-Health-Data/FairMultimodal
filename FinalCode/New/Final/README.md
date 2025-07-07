@@ -3,16 +3,6 @@
 *Official implementation of **“Equitable Electronic Health Record Prediction with FAME: Fairness‑Aware Multimodal Embedding.”***
 *Proceedings of the Machine Learning for Healthcare Conference (MLHC), 2024*
 
-<p align="center">
-  <img src="https://img.shields.io/github/v/release/NikkieHooman/FAME?color=orange&label=Release" />
-  <img src="https://img.shields.io/badge/License-MIT-green" />
-  <img src="https://img.shields.io/badge/Datasets-MIMIC--III-red" />
-  <img src="https://img.shields.io/badge/Python-%3E%3D3.9-blue" />
-  <!-- Uncomment when published on PyPI
-  <img src="https://img.shields.io/pypi/v/fame-mlhc" />
-  -->
-</p>
-
 ---
 
 ## Table of Contents
