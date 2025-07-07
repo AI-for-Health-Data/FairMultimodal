@@ -3,7 +3,7 @@
 *Official implementation of **“Equitable Electronic Health Record Prediction with FAME: Fairness‑Aware Multimodal Embedding.”***
 *Proceedings of the Machine Learning for Healthcare Conference (MLHC), 2024*
 
-
+---
 ## Table of Contents
 
 1. [Overview](#overview)
