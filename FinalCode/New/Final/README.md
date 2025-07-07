@@ -8,7 +8,7 @@
   <img src="https://img.shields.io/github/actions/workflow/status/NikkieHooman/FAME/ci.yml?label=Build" />
   <img src="https://img.shields.io/github/v/release/NikkieHooman/FAME?color=orange&label=Release" />
   <img src="https://img.shields.io/badge/License-MIT-green" />
-  <img src="https://img.shields.io/badge/Datasets-MIMIC--III%20%7C%20MIMIC--III-red" />
+  <img src="https://img.shields.io/badge/Datasets-MIMIC--III-red" />
   <img src="https://img.shields.io/badge/Python-%3E%3D3.9-blue" />
   <!-- Uncomment when published on PyPI
   <img src="https://img.shields.io/pypi/v/fame-mlhc" />
