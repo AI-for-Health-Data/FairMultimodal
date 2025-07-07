@@ -4,7 +4,6 @@
 *Proceedings of the Machine Learning for Healthcare Conference (MLHC), 2024*
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Status-Under%20Review-blue" />
   <img src="https://img.shields.io/github/actions/workflow/status/NikkieHooman/FAME/ci.yml?label=Build" />
   <img src="https://img.shields.io/github/v/release/NikkieHooman/FAME?color=orange&label=Release" />
   <img src="https://img.shields.io/badge/License-MIT-green" />
