@@ -1,8 +1,6 @@
-FAME · Fairness‑Aware Multimodal Embedding
+**FAME · Fairness‑Aware Multimodal Embedding**
 
 PyTorch implementation of our MLHC 2025 paper "[Equitable Electronic Health Record Prediction with FAME: Fairness‑Aware Multimodal Embedding](https://doi.org/10.48550/arXiv.2506.13104)"
-
-FAME is an open‑source fairness‑aware multimodal model that blends structured EHR, free‑text clinical notes, and demographics while actively minimizing bias across sensitive groups.
 
 ---
 ## Table of Contents
@@ -28,7 +26,7 @@ FAME is an open‑source fairness‑aware multimodal model that blends structure
 
 FAME is a **fairness‑aware multimodal AI framework** that fuses **structured EHR**, **clinical notes**, and **demographics** to make clinical predictions *without* amplifying bias across patient sub‑groups (age, ethnicity, insurance).
 
-*💡 Core idea:* **Weight each modality by how fair it is.**
+* Core idea:* **Weight each modality by how fair it is.**
 During training, FAME measures fairness with **EDDI** (Error Distribution Disparity Index) and dynamically increases the influence of modalities that treat all groups more equitably.
 
 The repository reproduces every experiment in the paper—baselines, ablations, and full FAME—using public **MIMIC‑III/IV** datasets.
@@ -60,7 +58,7 @@ The repository reproduces every experiment in the paper—baselines, ablations, 
 
 | File / Folder                     | Description                                          |
 | --------------------------------- | ---------------------------------------------------- |
-| `00_data.py`                      | Extract & preprocess MIMIC data (structured + notes) |
+| `FinalCode/New/Final/00_data.py`                      | Extract & preprocess MIMIC data (structured + notes) |
 | `01_BEHRT.py`                     | Baseline using BEHRT (structured)                    |
 | `02_BioClinicalBERT.py`           | Baseline using BioClinicalBERT (notes)               |
 | `03_DfC.py`                       | Demographic‑free Classification baseline             |
