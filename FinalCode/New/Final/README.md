@@ -74,17 +74,17 @@ FAME combines **BEHRT** (structured), **BioClinicalBERT** (text) & demographic e
 
 | File / Folder | Description |
 |--------------|-------------|
-| [`00_data.py`](00_data.py) | Extract & preprocess MIMIC data (structured + notes) |
-| [`01_BEHRT.py`](01_BEHRT.py) | Baseline using BEHRT (structured EHR) |
-| [`02_BioClinicalBERT.py`](02_BioClinicalBERT.py) | Baseline using BioClinicalBERT (clinical notes) |
-| [`03_DfC.py`](03_DfC.py) | Demographic-free Classification baseline |
-| [`04_AdvDebias.py`](04_AdvDebias.py) | Adversarial debiasing baseline |
-| [`05_FPM.py`](05_FPM.py) | Fair Patient Model baseline |
-| [`06_FairEHR-CLP.py`](06_FairEHR-CLP.py) | Contrastive debiasing baseline |
-| [`07_multimodal_average_fusion.py`](07_multimodal_average_fusion.py) | Average fusion of three modalities |
-| [`08_multimodal_eddi_fusion.py`](08_multimodal_eddi_fusion.py) | EDDI-only fusion (no sigmoid) |
-| [`09_multimodal_sigmoid_fusion.py`](09_multimodal_sigmoid_fusion.py) | Sigmoid-only fusion (no EDDI) |
-| [`10_FAME.py`](10_FAME.py) | **Full FAME** – EDDI + Sigmoid + joint loss |
+| [`00_data.py`](FinalCode/New/Final/00_data.py) | Extract & preprocess MIMIC data (structured + notes) |
+| [`01_BEHRT.py`](FinalCode/New/Final/01_BEHRT.py) | Baseline using BEHRT (structured EHR) |
+| [`02_BioClinicalBERT.py`](FinalCode/New/Final/02_BioClinicalBERT.py) | Baseline using BioClinicalBERT (clinical notes) |
+| [`03_DfC.py`](FinalCode/New/Final/03_DfC.py) | Demographic-free Classification baseline |
+| [`04_AdvDebias.py`](FinalCode/New/Final/04_AdvDebias.py) | Adversarial debiasing baseline |
+| [`05_FPM.py`](FinalCode/New/Final/05_FPM.py) | Fair Patient Model baseline |
+| [`06_FairEHR-CLP.py`](FinalCode/New/Final/06_FairEHR-CLP.py) | Contrastive debiasing baseline |
+| [`07_multimodal_average_fusion.py`](FinalCode/New/Final/07_multimodal_average_fusion.py) | Average fusion of three modalities |
+| [`08_multimodal_eddi_fusion.py`](FinalCode/New/Final/08_multimodal_eddi_fusion.py) | EDDI-only fusion (no sigmoid) |
+| [`09_multimodal_sigmoid_fusion.py`](FinalCode/New/Final/09_multimodal_sigmoid_fusion.py) | Sigmoid-only fusion (no EDDI) |
+| [`10_FAME.py`](FinalCode/New/Final/10_FAME.py) | **Full FAME** – EDDI + Sigmoid + joint loss |
 | [`requirements.txt`](requirements.txt) | Python dependencies |
 
 ---
