@@ -98,11 +98,10 @@ git clone https://github.com/your-org/FAME.git
 cd FAME
 
 # 2  (Optional) virtual env
-python -m venv venv && source venv/bin/activate   # Win: venv\Scripts\activate
+python -m venv venv && source venv/bin/activate   
 
 # 3  Install deps
 pip install -r requirements.txt
-# or: conda env create -f environment.yml && conda activate fame
 
 # 4  Pre-process MIMIC (≈ 15 min)
 python 00_data.py --mimic_root /path/to/mimic --out_dir data/
@@ -208,11 +207,6 @@ Epoch 5 │ AUROC 0.943 │ AUPRC 0.817 │ EDDI 0.44 │ EO 4.25
 ```bash
 tensorboard --logdir outputs/tensorboard
 ```
-
-### Hardware
-
-`1 × A100 40 GB` trains full FAME on **all three tasks in \~2.5 h**.
-On smaller GPUs, reduce `--bsz`, call `--freeze_backbone`, or pre-train modalities then fine-tune fusion.
 
 ---
 
