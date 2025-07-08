@@ -74,7 +74,7 @@ FAME combines **BEHRT** (structured), **BioClinicalBERT** (text) & demographic e
 
 | File / Folder | Description |
 |--------------|-------------|
-| [`00_data.py`](00_data.py) | Extract & preprocess MIMIC data (structured + notes) |
+| [`00_data.py`](FinalCode/New/Final/00_data.py) | Extract & preprocess MIMIC data (structured + notes) |
 | [`01_BEHRT.py`](01_BEHRT.py) | Baseline using BEHRT (structured EHR) |
 | [`02_BioClinicalBERT.py`](02_BioClinicalBERT.py) | Baseline using BioClinicalBERT (clinical notes) |
 | [`03_DfC.py`](03_DfC.py) | Demographic-free Classification baseline |
