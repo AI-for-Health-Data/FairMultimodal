@@ -239,12 +239,11 @@ tensorboard --logdir outputs/tensorboard
 ##  Citation
 
 ```bibtex
-@misc{lastname2024fame,
-  title  = {Equitable Electronic Health Record Prediction with FAME: Fairness-Aware Multimodal Embedding},
-  author = {Lastname, Firstname and Lastname, Firstname},
-  year   = {2024},
-  note   = {Machine Learning for Healthcare (under review)},
-  url    = {https://github.com/your-org/FAME}
+@article{hooman2025equitable,
+  title={Equitable Electronic Health Record Prediction with FAME: Fairness-Aware Multimodal Embedding},
+  author={Hooman, Nikkie and Wu, Zhongjie and Larson, Eric C and Gupta, Mehak},
+  journal={arXiv preprint arXiv:2506.13104},
+  year={2025}
 }
 ```
 
