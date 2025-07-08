@@ -99,13 +99,12 @@ git clone https://github.com/your-org/FAME.git
 cd FAME
 
 # 2  (Optional) virtual env
-python -m venv venv && source venv/bin/activate   # Win: venv\Scripts\activate
+python -m venv venv && source venv/bin/activate 
 
 # 3  Install deps
 pip install -r requirements.txt
-# or: conda env create -f environment.yml && conda activate fame
 
-# 4  Pre-process MIMIC (≈ 15 min)
+# 4  Pre-process MIMIC 
 python 00_data.py --mimic_root /path/to/mimic --out_dir data/
 
 # 5  Train FAME on three tasks
