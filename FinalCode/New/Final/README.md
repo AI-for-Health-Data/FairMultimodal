@@ -1,8 +1,35 @@
-**FAME · Fairness‑Aware Multimodal Embedding**
+<!-- ================================================================ -->
+<!--  README – FAME: Fairness-Aware Multimodal Embedding              -->
+<!--  Place this file at the repo root                                -->
+<!-- ================================================================ -->
 
-PyTorch implementation of our MLHC 2025 paper "[Equitable Electronic Health Record Prediction with FAME: Fairness‑Aware Multimodal Embedding](https://doi.org/10.48550/arXiv.2506.13104)"
+<p align="center">
+  <!-- Hero / architecture figure (replace with your own if you like) -->
+  <img width="1075" alt="Screenshot 2025-07-07 at 3 07 03 PM" src="https://github.com/user-attachments/assets/497f1821-ff3c-4eda-b1c7-5af0d11edb07" />
+
+  <br><br>
+  <b>FAME · Fairness-Aware Multimodal Embedding</b><br>
+  <i>PyTorch implementation of our MLHC 2025 paper<br>
+  “Equitable Electronic Health Record Prediction with FAME”</i>
+</p>
+
+<p align="center">
+  <a href="https://arxiv.org/abs/2506.13104">
+    <img src="https://img.shields.io/badge/arXiv-2506.13104-b31b1b.svg" alt="arXiv:2506.13104">
+  </a>
+  <a href="https://github.com/your-org/FAME/actions">
+    <img src="https://github.com/your-org/FAME/workflows/CI/badge.svg" alt="CI status">
+  </a>
+  <a href="LICENSE">
+    <img src="https://img.shields.io/badge/license-MIT-green.svg" alt="MIT license">
+  </a>
+  <a href="https://pytorch.org">
+    <img src="https://img.shields.io/badge/PyTorch-2.1%20%2B-ee4c2c.svg" alt="PyTorch ≥ 2.1">
+  </a>
+</p>
 
 ---
+
 ## Table of Contents
 
 1. [Overview](#overview)
@@ -14,22 +41,18 @@ PyTorch implementation of our MLHC 2025 paper "[Equitable Electronic Health Rec
 7. [Training & Evaluation](#training--evaluation)
 8. [Expected Results](#expected-results)
 9. [Custom Use](#custom-use)
-10. [Contributing](#contributing)
-11. [Changelog](#changelog)
-12. [Citation](#citation)
-13. [License](#license)
-14. [Contact](#contact)
-
+10. [Citation](#citation)
+11. [License](#license)
+12. [Contact](#contact)
 ---
 
-## Overview
+##  Overview
+**FAME** is a *fairness-aware* multimodal AI framework that fuses **structured EHR**, **clinical notes**, and **demographics** to make clinical predictions **without amplifying bias** across patient sub-groups (age, ethnicity, insurance).
 
-FAME is a **fairness‑aware multimodal AI framework** that fuses **structured EHR**, **clinical notes**, and **demographics** to make clinical predictions *without* amplifying bias across patient sub‑groups (age, ethnicity, insurance).
+*Core idea*: **Weight each modality by how *fair* it is.**  
+During training FAME computes **EDDI (Error-Distribution Disparity Index)** and dynamically up-weights modalities that are more equitable.
 
-* Core idea:* **Weight each modality by how fair it is.**
-During training, FAME measures fairness with **EDDI** (Error Distribution Disparity Index) and dynamically increases the influence of modalities that treat all groups more equitably.
-
-The repository reproduces every experiment in the paper—baselines, ablations, and full FAME—using public **MIMIC‑III/IV** datasets.
+The repo reproduces every experiment in the paper—baselines, ablations & the full FAME model—on public **MIMIC-III/IV** data.
 
 ---
 
@@ -41,19 +64,14 @@ The repository reproduces every experiment in the paper—baselines, ablations, 
 * **Plug‑and‑play modalities**: swap encoders or add new ones (e.g., imaging).
 * **Reproducible**: seeds set, deterministic Torch ops where possible.
 
----
-
-## Architecture
-
-<p align="center">
-  <img width="1075" alt="Screenshot 2025-07-07 at 3 07 03 PM" src="https://github.com/user-attachments/assets/497f1821-ff3c-4eda-b1c7-5af0d11edb07" />
-</p>
-
-
-*Figure 1 – FAME combines BEHRT (structured data) and BioClinicalBERT (clinical notes) plus demographics. The fusion layer applies EDDI‑based modality weights and a sigmoid gate, then optimizes a joint BCE + EDDI loss.*
 
 ---
-## Folder Structure
+
+##  Architecture
+*See the hero figure above.*  
+FAME combines **BEHRT** (structured), **BioClinicalBERT** (text) & demographic embeddings. A fusion layer multiplies each modality by a learnable *fairness weight* (EDDI-guided) plus a **sigmoid gate**, then optimises a joint **BCE + β·LEDDI** loss.
+
+---
 
 | File / Folder | Description |
 |--------------|-------------|
@@ -69,127 +87,122 @@ The repository reproduces every experiment in the paper—baselines, ablations, 
 | [`09_multimodal_sigmoid_fusion.py`](09_multimodal_sigmoid_fusion.py) | Sigmoid-only fusion (no EDDI) |
 | [`10_FAME.py`](10_FAME.py) | **Full FAME** – EDDI + Sigmoid + joint loss |
 | [`requirements.txt`](requirements.txt) | Python dependencies |
-| [`docs/figures/`](docs/figures/) | Architecture & result visuals |
-| [`tests/`](tests/) | Unit tests & CI scripts |
 
 ---
 
-## Quick Start
-
-> Tested on **Python ≥3.9** and **PyTorch ≥2.1** with a single GPU (≥12 GB VRAM).
+##  Quick Start
+> Tested on **Python ≥ 3.9** & **PyTorch ≥ 2.1** with a single GPU (≥ 12 GB VRAM).
 
 ```bash
-# 1. Clone
-$ git clone https://github.com/NikkieHooman/FAME.git
-$ cd FAME
+# 1  Clone
+git clone https://github.com/your-org/FAME.git
+cd FAME
 
-# 2. (Optional) Create & activate virtual environment
-$ python -m venv venv
-$ source venv/bin/activate  # Windows: venv\Scripts\activate
+# 2  (Optional) virtual env
+python -m venv venv && source venv/bin/activate   # Win: venv\Scripts\activate
 
-# 3. Install dependencies
-$ pip install -r requirements.txt
-#   or, with conda:
-$ conda env create -f environment.yml && conda activate fame
+# 3  Install deps
+pip install -r requirements.txt
+# or: conda env create -f environment.yml && conda activate fame
 
-# 4. Pre‑process MIMIC (≈15 min)
-$ python 00_data.py --mimic_root /path/to/mimic --out_dir data/
+# 4  Pre-process MIMIC (≈ 15 min)
+python 00_data.py --mimic_root /path/to/mimic --out_dir data/
 
-# 5. Train FAME on all three tasks
-$ python 10_FAME.py --tasks mortality readmission ventilation --lambda 0.8 \
-                    --epochs 30 --batch_size 32
-```
+# 5  Train FAME on three tasks
+python 10_FAME.py --tasks mortality los ventilation \
+                  --lambda 0.8 --epochs 30 --bsz 32
+````
 
-CI will automatically run `pytest` on push / PR to validate basic functionality.
+CI runs `pytest` automatically on every push / PR.
 
 ---
 
-## Data Preparation
+##  Data Preparation
 
-1. **MIMIC Credentials** – Complete the PhysioNet credentialing quiz and download **MIMIC-III v1.4**. Drop all compressed CSVs (e.g., `ADMISSIONS.csv.gz`, `CHARTEVENTS.csv.gz`, …) into a single folder such as `/mnt/mimic`.
+1. **Download MIMIC-III v1.4 / MIMIC-IV** and pass the PhysioNet credentialing quiz.
+   Place all `*.csv.gz` files in, e.g., `/mnt/mimic`.
 
 2. Run
 
    ```bash
-   python 00_data.py --mimic-dir /mnt/mimic --out-dir data/
+   python 00_data.py --mimic_dir /mnt/mimic --out_dir data/
    ```
 
-   to create
+   which creates:
 
-   * **`final_structured_with_feature_set_C_24h_2h_bins.csv`** – 2-hour-binned vitals, labs, inputs/outputs & meds plus demographics
-   * **`unstructured_with_demographics.csv`** – all first-ICU-stay notes (cleaned, lower-cased) split into ≤ 512-token chunks (`note_chunk_1`, `note_chunk_2`, …)
-   * Both files already include the task labels: **`short_term_mortality`**, **`los_binary`** (ICU-stay > 7 days), **`mechanical_ventilation`**
+   | CSV                                                   | What’s inside                                                              |
+   | ----------------------------------------------------- | -------------------------------------------------------------------------- |
+   | `final_structured_with_feature_set_C_24h_2h_bins.csv` | 2-h-binned vitals / labs + demographics                                    |
+   | `unstructured_with_demographics.csv`                  | First-stay notes split into ≤512-token chunks                              |
+   | *(both)*                                              | Task labels `short_term_mortality`, `los_binary`, `mechanical_ventilation` |
 
-3. Sensitive attributes are added automatically: **age\_bucket, ethnicity\_category, insurance\_category**.
+   Sensitive attributes (`age_bucket`, `ethnicity_category`, `insurance_category`) are added automatically.
 
-*No raw patient data is checked into this repository—only de-identified aggregates and cleaned text.*
+*No raw PHI is committed—only de-identified aggregates.*
 
 ---
+
 ##  Training & Evaluation
 
-Each experiment script follows the **same command-line API** – swap the filename to run a different baseline, ablation or the full FAME model.
+All scripts share **one CLI** – just change the filename:
 
 ```bash
-# 1)  Unimodal baseline ─ BEHRT (structured only)
+# 1) BEHRT (structured-only)
 python 01_BEHRT.py                     --task mortality
 
-# 2)  Text-only baseline ─ BioClinicalBERT
+# 2) BioClinicalBERT (text-only)
 python 02_BioClinicalBERT.py           --task ventilation   --epochs 30
 
-# 3)  Demographic-free (un-awareness) baseline
+# 3) Demographic-free
 python 03_DfC.py                       --task los
 
-# 4)  Adversarial debiasing baseline
+# 4) Adversarial debiasing
 python 04_AdvDebias.py                 --task mortality     --alpha 2
 
-# 5)  Fair Patient Model (stacked auto-encoder)
+# 5) Fair Patient Model
 python 05_FPM.py                       --task los
 
-# 6)  Contrastive debiasing (FairEHR-CLP, Wang et al. 2024)
+# 6) FairEHR-CLP (contrastive)
 python 06_FairEHR-CLP.py               --task ventilation   --temp 0.07
 
-# 7)  Average-fusion ablation (equal weights)
+# 7) Average-fusion ablation
 python 07_multimodal_average_fusion.py --task mortality
 
-# 8)  EDDI-weighted ablation (no sigmoid gate)
+# 8) EDDI-weighted ablation
 python 08_multimodal_eddi_fusion.py    --task los           --lambda 0.8
 
-# 9)  Sigmoid-gate ablation (no EDDI weights)
+# 9) Sigmoid-only ablation
 python 09_multimodal_sigmoid_fusion.py --task ventilation
 
-# 10) ★ **FAME** – Fairness-Aware Multimodal Embedding (full model)
+# 10) ★ Full FAME
 python 10_FAME.py                      --task mortality     --lambda 0.8 --epochs 50
 ```
 
 ### Common flags
 
-| Flag                                   | Purpose                                              | Default        |
-| -------------------------------------- | ---------------------------------------------------- | -------------- |
-| `--task {mortality, los, ventilation}` | Selects the prediction head                          | `mortality`    |
-| `--epochs N`                           | Maximum training epochs (early-stopping on val-loss) | `50`           |
-| `--bsz N`                              | Mini-batch size                                      | `16`           |
-| `--lr FLOAT`                           | AdamW learning-rate                                  | model-specific |
-| `--lambda FLOAT`                       | Fairness-loss weight (EDDI)                          | script default |
-| `--temp FLOAT`                         | Contrastive temperature (FairEHR-CLP only)           | `0.07`         |
-| `--tensorboard`                        | Stream metrics to TensorBoard                        | *off*          |
-
-Run any script with `-h` or `--help` to see the complete set of options.
+| Flag                                   | Purpose                                 | Default        |
+| -------------------------------------- | --------------------------------------- | -------------- |
+| `--task {mortality, los, ventilation}` | Choose prediction head                  | `mortality`    |
+| `--epochs`                             | Max epochs (early-stopping on val-loss) | `50`           |
+| `--bsz`                                | Mini-batch size                         | `16`           |
+| `--lr`                                 | AdamW learning-rate                     | model-specific |
+| `--lambda`                             | Fairness loss weight (EDDI)             | script default |
+| `--temp`                               | Contrastive temp (FairEHR-CLP)          | `0.07`         |
+| `--tensorboard`                        | Stream metrics to TensorBoard           | off            |
 
 ### Outputs
 
-| Path                              | What you get                         |
-| --------------------------------- | ------------------------------------ |
-| `outputs/checkpoints/<run-id>.pt` | Best model (lowest **val-loss**)     |
-| `outputs/logs/<run-id>.csv`       | Per-epoch metrics                    |
-| `outputs/tensorboard/<run-id>/`   | TensorBoard event files (if enabled) |
+| Path                              | Contents                       |
+| --------------------------------- | ------------------------------ |
+| `outputs/checkpoints/<run-id>.pt` | Best model (*lowest val-loss*) |
+| `outputs/logs/<run-id>.csv`       | Per-epoch metrics              |
+| `outputs/tensorboard/<run-id>/`   | TensorBoard events             |
 
-A typical log line looks like
+Typical log line:
 
 ```
 Epoch 5 │ AUROC 0.943 │ AUPRC 0.817 │ EDDI 0.44 │ EO 4.25
 ```
-
-where **EDDI** (Error-Distribution Disparity Index) and **EO** (Equalized-Odds gap, %) are the fairness measures reported in the paper.
 
 ### Monitoring
 
@@ -197,74 +210,54 @@ where **EDDI** (Error-Distribution Disparity Index) and **EO** (Equalized-Odds g
 tensorboard --logdir outputs/tensorboard
 ```
 
-### Hardware notes
-
-* **FAME** back-propagates through both BEHRT and BioClinicalBERT **plus** the fairness loss.
-  *1 × A100 40 GB* trains the full model in ≈ 2 ½ h (all three tasks).
-  For lighter GPUs, reduce `--bsz`, freeze encoders with `--freeze-backbone`, or train each modality separately first (see comments inside `10_FAME.py`).
-
-
 ---
 
-## Expected Results
+##  Expected Results
 
 <details>
-<summary>5‑run averages from the paper (Table 3)</summary>
+<summary>Paper (Table 3) – 5-run averages</summary>
 
-| Task             | AUROC ↑  | AUPRC ↑  | EDDI % ↓ | EO % ↓   |
-| ---------------- | -------- | -------- | -------- | -------- |
-| **Mortality**    | **0.94** | **0.82** | **0.44** | **4.25** |
-| **LOS ≥ 7 days** | **1.00** | **1.00** | **0.02** | **0.06** |
-| **Ventilation**  | **0.84** | **0.97** | **2.77** | **0.55** |
+| Task        | AUROC ↑  | AUPRC ↑  | EDDI % ↓ | EO % ↓   |
+| ----------- | -------- | -------- | -------- | -------- |
+| Mortality   | **0.94** | **0.82** | **0.44** | **4.25** |
+| LOS ≥ 7 d   | **1.00** | **1.00** | **0.02** | **0.06** |
+| Ventilation | **0.84** | **0.97** | **2.77** | **0.55** |
 
 </details>
 
 ---
 
-## Custom Use
+##  Custom Use
 
-Want to apply FAME to your own dataset or add an imaging modality?
+1. **Dataset** – implement `CustomDataset` in `data_loader.py` returning
+   `structured`, `text`, `demo`, `label` *(+ `image`, etc.)*.
+2. **Encoder** – add your module in `models/encoders.py` and import it.
+3. **Train** with `--image_encoder resnet50` (or your name).
+   The fairness engine handles extra modalities automatically.
 
-1. **Create** a `CustomDataset` in `data_loader.py` that returns a dict with keys `structured`, `text`, `demo`, `label` (+ your new key, e.g., `image`).
-2. **Add** your encoder in `models/encoders.py` and register it in `__init__.py`.
-3. **Pass** `--image_encoder your_cnn_name` from CLI. The fairness engine handles extra modalities automatically.
-
----
-
-## Contributing
-
-We welcome pull requests! Please read **[CONTRIBUTING.md](CONTRIBUTING.md)** for our coding guidelines, branch strategy, and how to run local tests. By contributing you agree to follow the **[Code of Conduct](CODE_OF_CONDUCT.md)**.
 
 ---
 
-## Changelog
-
-See **[CHANGELOG.md](CHANGELOG.md)** for a curated list of notable updates.
-
----
-
-## Citation
-
-If FAME is useful in your work, please cite us ✨
+##  Citation
 
 ```bibtex
-@misc{lastname2024fame,
-  title  = {Equitable Electronic Health Record Prediction with FAME: Fairness‑Aware Multimodal Embedding},
-  author = {Lastname, Firstname and Lastname, Firstname},
-  year   = {2024},
-  note   = {Machine Learning for Healthcare (under review)},
-  url    = {https://github.com/NikkieHooman/FAME}
+@article{hooman2025equitable,
+  title={Equitable Electronic Health Record Prediction with FAME: Fairness-Aware Multimodal Embedding},
+  author={Hooman, Nikkie and Wu, Zhongjie and Larson, Eric C and Gupta, Mehak},
+  journal={arXiv preprint arXiv:2506.13104},
+  year={2025}
 }
 ```
 
 ---
 
-## License
+##  License
 
-This project is licensed under the **MIT License**. See [`LICENSE`](LICENSE) for the full text.
+Released under the **MIT License** – see [`LICENSE`](LICENSE).
 
 ---
 
-## Contact
+##  Contact
 
-Questions or ideas? Feel free to open an issue or email **[name@email.edu](mailto:name@email.edu)**.
+Questions? Open an issue or email **[nikkieh@smu.edu]**.
+
