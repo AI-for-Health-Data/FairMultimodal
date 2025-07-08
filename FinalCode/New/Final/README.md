@@ -125,7 +125,7 @@ CI will automatically run `pytest` on push / PR to validate basic functionality.
 *No raw patient data is checked into this repository—only de-identified aggregates and cleaned text.*
 
 ---
-## 🚀 Training & Evaluation
+##  Training & Evaluation
 
 Each experiment script follows the **same command-line API** – swap the filename to run a different baseline, ablation or the full FAME model.
 
@@ -268,5 +268,3 @@ This project is licensed under the **MIT License**. See [`LICENSE`](LICENSE) for
 ## Contact
 
 Questions or ideas? Feel free to open an issue or email **[name@email.edu](mailto:name@email.edu)**.
-
-*Happy (fair) modeling ♥️*
