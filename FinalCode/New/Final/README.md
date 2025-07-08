@@ -2,7 +2,15 @@
 <!--  README – FAME: Fairness-Aware Multimodal Embedding              -->
 <!--  Place this file at the repo root                                -->
 <!-- ================================================================ -->
+<p align="center">
+  <!-- Hero / architecture figure (replace with your own if you like) -->
+  <img width="1075" alt="Screenshot 2025-07-07 at 3 07 03 PM" src="https://github.com/user-attachments/assets/497f1821-ff3c-4eda-b1c7-5af0d11edb07" />
 
+  <br><br>
+  <b>FAME · Fairness-Aware Multimodal Embedding</b><br>
+  <i>PyTorch implementation of our MLHC 2025 paper<br>
+  “Equitable Electronic Health Record Prediction with FAME”</i>
+</p>
 
 <p align="center">
   <a href="https://arxiv.org/abs/2506.13104">
@@ -19,15 +27,6 @@
   </a>
 </p>
 
-<p align="center">
-  <!-- Hero / architecture figure (replace with your own if you like) -->
-  <img width="1075" alt="Screenshot 2025-07-07 at 3 07 03 PM" src="https://github.com/user-attachments/assets/497f1821-ff3c-4eda-b1c7-5af0d11edb07" />
-
-  <br><br>
-  <b>FAME · Fairness-Aware Multimodal Embedding</b><br>
-  <i>PyTorch implementation of our MLHC 2025 paper<br>
-  “Equitable Electronic Health Record Prediction with FAME”</i>
-</p>
 ---
 
 ## Table of Contents
