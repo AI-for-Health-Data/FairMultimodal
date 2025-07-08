@@ -1,30 +1,30 @@
 <!-- ================================================================ -->
 <!--  README – FAME: Fairness-Aware Multimodal Embedding              -->
-<!--  Place this file at the repo root                                -->
 <!-- ================================================================ -->
-<p align="center">
-  <!-- Hero / architecture figure (replace with your own if you like) -->
-  <img width="1075" alt="Screenshot 2025-07-07 at 3 07 03 PM" src="https://github.com/user-attachments/assets/497f1821-ff3c-4eda-b1c7-5af0d11edb07" />
 
-  <br><br>
-  <b>FAME · Fairness-Aware Multimodal Embedding</b><br>
-  <i>PyTorch implementation of our MLHC 2025 paper<br>
-  “Equitable Electronic Health Record Prediction with FAME”</i>
+<h1 align="center">FAME · Fairness-Aware Multimodal Embedding</h1>
+
+<p align="center">
+  <i>PyTorch implementation of our MLHC&nbsp;2025 paper<br>
+  “Equitable Electronic Health Record Prediction with&nbsp;FAME”</i>
 </p>
 
 <p align="center">
   <a href="https://arxiv.org/abs/2506.13104">
     <img src="https://img.shields.io/badge/arXiv-2506.13104-b31b1b.svg" alt="arXiv:2506.13104">
   </a>
-  <a href="https://github.com/your-org/FAME/actions">
-    <img src="https://github.com/your-org/FAME/workflows/CI/badge.svg" alt="CI status">
-  </a>
+
   <a href="LICENSE">
     <img src="https://img.shields.io/badge/license-MIT-green.svg" alt="MIT license">
   </a>
   <a href="https://pytorch.org">
     <img src="https://img.shields.io/badge/PyTorch-2.1%20%2B-ee4c2c.svg" alt="PyTorch ≥ 2.1">
   </a>
+</p>
+
+<p align="center">
+  <!-- Hero / architecture figure (replace with your own if you like) -->
+  <img width="1075" alt="Screenshot 2025-07-07 at 3 07 03 PM" src="https://github.com/user-attachments/assets/497f1821-ff3c-4eda-b1c7-5af0d11edb07" />
 </p>
 
 ---
@@ -98,12 +98,13 @@ git clone https://github.com/your-org/FAME.git
 cd FAME
 
 # 2  (Optional) virtual env
-python -m venv venv && source venv/bin/activate 
+python -m venv venv && source venv/bin/activate   # Win: venv\Scripts\activate
 
 # 3  Install deps
 pip install -r requirements.txt
+# or: conda env create -f environment.yml && conda activate fame
 
-# 4  Pre-process MIMIC 
+# 4  Pre-process MIMIC (≈ 15 min)
 python 00_data.py --mimic_root /path/to/mimic --out_dir data/
 
 # 5  Train FAME on three tasks
@@ -208,6 +209,11 @@ Epoch 5 │ AUROC 0.943 │ AUPRC 0.817 │ EDDI 0.44 │ EO 4.25
 tensorboard --logdir outputs/tensorboard
 ```
 
+### Hardware
+
+`1 × A100 40 GB` trains full FAME on **all three tasks in \~2.5 h**.
+On smaller GPUs, reduce `--bsz`, call `--freeze_backbone`, or pre-train modalities then fine-tune fusion.
+
 ---
 
 ##  Expected Results
@@ -239,11 +245,12 @@ tensorboard --logdir outputs/tensorboard
 ##  Citation
 
 ```bibtex
-@article{hooman2025equitable,
-  title={Equitable Electronic Health Record Prediction with FAME: Fairness-Aware Multimodal Embedding},
-  author={Hooman, Nikkie and Wu, Zhongjie and Larson, Eric C and Gupta, Mehak},
-  journal={arXiv preprint arXiv:2506.13104},
-  year={2025}
+@misc{lastname2024fame,
+  title  = {Equitable Electronic Health Record Prediction with FAME: Fairness-Aware Multimodal Embedding},
+  author = {Lastname, Firstname and Lastname, Firstname},
+  year   = {2024},
+  note   = {Machine Learning for Healthcare (under review)},
+  url    = {https://github.com/your-org/FAME}
 }
 ```
 
