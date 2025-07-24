@@ -51,7 +51,7 @@
 *Core idea*: **Weight each modality by how *fair* it is.**  
 During training FAME computes **EDDI (Error-Distribution Disparity Index)** and dynamically up-weights modalities that are more equitable.
 
-The repo reproduces every experiment in the paper—baselines, ablations & the full FAME model—on public **MIMIC-III/IV** data.
+The repo reproduces every experiment in the paper—baselines, ablations & the full FAME model—on public **MIMIC-III** data.
 
 ---
 
@@ -117,7 +117,7 @@ CI runs `pytest` automatically on every push / PR.
 
 ##  Data Preparation
 
-1. **Download MIMIC-III v1.4 / MIMIC-IV** and pass the PhysioNet credentialing quiz.
+1. **Download MIMIC-III v1.4** and pass the PhysioNet credentialing quiz.
    Place all `*.csv.gz` files in, e.g., `/mnt/mimic`.
 
 2. Run
